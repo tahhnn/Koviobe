@@ -20,8 +20,7 @@ This builds and starts:
 
 The backend seeds a default admin account on every boot:
 
-- Email: `admin@kovio.local`
-- Password: `KovioAdmin!2026`
+
 
 Override via environment variables `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in `docker-compose.yml` or a `.env` file.
 
