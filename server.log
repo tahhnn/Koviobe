@@ -1,0 +1,935 @@
+2026/07/22 14:20:10 Starting Kovio API Gateway...
+2026/07/22 14:20:10 PostgreSQL connection established successfully.
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[16.755ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'permissions' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.933ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[25.854ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.200ms] [34;1m[rows:-][0m SELECT * FROM "permissions" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[15.916ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'permissions' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[8.742ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.924ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.921ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'permissions' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[5.112ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'permissions' AND column_name = 'name') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.212ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'permissions' AND column_name = 'description') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.957ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'permissions' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[6.203ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'permissions' AND indexname = 'idx_permissions_name' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.481ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.780ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[6.813ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'roles'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.025ms] [34;1m[rows:-][0m SELECT * FROM "roles" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.718ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'roles' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.320ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'roles'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.101ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'roles'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.205ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.925ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'name') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.068ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'description') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.751ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.538ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.378ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'roles' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'roles' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.545ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'roles' AND indexname = 'idx_roles_name' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.324ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'roles' AND indexname = 'idx_roles_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.839ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.542ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[5.056ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.301ms] [34;1m[rows:-][0m SELECT * FROM "role_permissions" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.977ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'role_permissions' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[6.429ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'role_permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.837ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'role_permissions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.044ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions' AND column_name = 'role_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'role_permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.087ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions' AND column_name = 'permission_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'role_permissions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.744ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions' AND constraint_name = 'fk_role_permissions_role'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.593ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'role_permissions' AND constraint_name = 'fk_role_permissions_permission'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.186ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.393ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.392ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'users'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.094ms] [34;1m[rows:-][0m SELECT * FROM "users" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[9.069ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'users' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[16.367ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'users'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.747ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'users'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[4.654ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.642ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'role_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.388ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'email') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.816ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'password') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.966ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'nickname') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.844ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.820ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.330ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'users' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[5.051ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'users' AND constraint_name = 'fk_users_role'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.713ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'users' AND indexname = 'idx_users_role_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.592ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'users' AND indexname = 'idx_users_email' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.781ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'users' AND indexname = 'idx_users_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.703ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.057ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[8.692ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.806ms] [34;1m[rows:-][0m SELECT * FROM "quizzes" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[9.501ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'quizzes' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[9.584ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'quizzes'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.384ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'quizzes'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.184ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.240ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'host_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.821ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'title') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.448ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'description') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.160ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'theme_config') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.872ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.966ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.590ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'quizzes' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'quizzes' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.940ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'quizzes' AND indexname = 'idx_quizzes_host_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.627ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'quizzes' AND indexname = 'idx_quizzes_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.062ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.333ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[9.029ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'questions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.902ms] [34;1m[rows:-][0m SELECT * FROM "questions" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[7.366ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'questions' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[8.303ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'questions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.384ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'questions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.292ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.265ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'quiz_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.413ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'content') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.478ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'type') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.256ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'options') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.747ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'correct_answer') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.283ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'duration') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.143ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'points') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.140ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'order') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.386ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.360ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'questions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.183ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'questions' AND constraint_name = 'fk_quizzes_questions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.115ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'questions' AND indexname = 'idx_questions_quiz_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.143ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.890ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.050ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'templates'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.253ms] [34;1m[rows:-][0m SELECT * FROM "templates" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.382ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'templates' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.850ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'templates'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.886ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'templates'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.950ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.584ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'host_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.157ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'title') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.090ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'description') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.098ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'questions') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.960ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.549ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.187ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'templates' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'templates' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.915ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'templates' AND indexname = 'idx_templates_host_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.349ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'templates' AND indexname = 'idx_templates_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.948ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.589ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.836ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'rooms'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.912ms] [34;1m[rows:-][0m SELECT * FROM "rooms" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.322ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'rooms' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.630ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'rooms'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.866ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'rooms'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.917ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.473ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'pin_code') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.155ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'quiz_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.201ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'host_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.134ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'status') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.855ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'is_private') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.121ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'theme_config') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.187ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'current_question_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.957ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'current_question_index') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.428ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'question_active_until') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.075ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.206ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.140ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'rooms' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.125ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'rooms' AND constraint_name = 'fk_rooms_quiz'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.412ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'rooms' AND indexname = 'idx_rooms_pin_code' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.960ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'rooms' AND indexname = 'idx_rooms_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.548ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.423ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.997ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'players'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.243ms] [34;1m[rows:-][0m SELECT * FROM "players" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.697ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'players' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.990ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'players'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.821ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'players'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.338ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.071ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'room_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.227ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'user_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.076ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'nickname') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.818ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'score') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.509ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'is_connected') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.989ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'current_question_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.117ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'question_active_until') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.065ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.135ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'players' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'players' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.535ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'players' AND indexname = 'idx_room_nickname' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.659ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'players' AND indexname = 'idx_players_user_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.551ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.275ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.091ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.838ms] [34;1m[rows:-][0m SELECT * FROM "answer_logs" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.577ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'answer_logs' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.697ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'answer_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.637ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'answer_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.597ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[4.772ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'room_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.365ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'player_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.332ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'question_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.980ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'selected_option') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.042ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'is_correct') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.913ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'points_earned') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.617ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'response_time_ms') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.358ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'answer_logs' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'answer_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.598ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'answer_logs' AND indexname = 'idx_answer_logs_room_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.479ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'answer_logs' AND indexname = 'idx_player_question' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.131ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.525ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.990ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.785ms] [34;1m[rows:-][0m SELECT * FROM "game_sessions" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.932ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'game_sessions' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.604ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'game_sessions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.017ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'game_sessions'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.615ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.362ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'room_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.146ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'host_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.319ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'quiz_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.216ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'rankings') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.996ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'player_count') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.752ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'ended_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.667ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'game_sessions' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'game_sessions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.665ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'game_sessions' AND indexname = 'idx_game_sessions_quiz_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.722ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'game_sessions' AND indexname = 'idx_game_sessions_room_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.544ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'game_sessions' AND indexname = 'idx_game_sessions_host_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.146ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.702ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[3.515ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.958ms] [34;1m[rows:-][0m SELECT * FROM "audit_logs" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.477ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'audit_logs' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.615ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'audit_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.875ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'audit_logs'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.976ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.225ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'user_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.277ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'action') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.124ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'resource') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.671ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'ip_address') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.602ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'audit_logs' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'audit_logs' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.385ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'audit_logs' AND indexname = 'idx_audit_logs_user_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.326ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.182ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.993ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.900ms] [34;1m[rows:-][0m SELECT * FROM "pricing_plans" LIMIT 5
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.400ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'pricing_plans' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.194ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'pricing_plans'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.428ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'pricing_plans'
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.688ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.729ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'name') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.670ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'description') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.611ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'price_monthly_vnd') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.548ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'max_players_per_room') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.594ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'max_quizzes') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.941ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'max_templates') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.829ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'max_concurrent_rooms') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.016ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'max_questions_per_quiz') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.848ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'allow_player_paced') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.647ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'allow_custom_branding') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.939ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'allow_export_logs') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.884ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'allow_priority_support') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.783ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'allow_remove_watermark') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.336ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'is_active') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:10 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.154ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'sort_order') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.939ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.995ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.111ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'pricing_plans' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'pricing_plans' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.821ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'pricing_plans' AND indexname = 'idx_pricing_plans_deleted_at' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.849ms] [34;1m[rows:1][0m SELECT count(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND table_type = 'BASE TABLE'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.550ms] [34;1m[rows:1][0m SELECT CURRENT_DATABASE()
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.878ms] [34;1m[rows:-][0m SELECT c.column_name, c.is_nullable = 'YES', c.udt_name, c.character_maximum_length, c.numeric_precision, c.numeric_precision_radix, c.numeric_scale, c.datetime_precision, 8 * typlen, c.column_default, pd.description, c.identity_increment FROM information_schema.columns AS c JOIN pg_type AS pgt ON c.udt_name = pgt.typname LEFT JOIN pg_catalog.pg_description as pd ON pd.objsubid = c.ordinal_position AND pd.objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = c.table_name AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = c.table_schema)) where table_catalog = 'kovio' AND table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.364ms] [34;1m[rows:-][0m SELECT * FROM "subscriptions" LIMIT 5
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.934ms] [34;1m[rows:-][0m SELECT constraint_name FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'subscriptions' AND constraint_type = 'UNIQUE'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.337ms] [34;1m[rows:-][0m SELECT c.column_name, constraint_name, constraint_type FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage AS ccu USING (constraint_schema, constraint_catalog, table_name, constraint_name) JOIN information_schema.columns AS c ON c.table_schema = tc.constraint_schema AND tc.table_name = c.table_name AND ccu.column_name = c.column_name WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE') AND c.table_catalog = 'kovio' AND c.table_schema = CURRENT_SCHEMA() AND c.table_name = 'subscriptions'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.438ms] [34;1m[rows:-][0m SELECT a.attname as column_name, format_type(a.atttypid, a.atttypmod) AS data_type
+		FROM pg_attribute a JOIN pg_class b ON a.attrelid = b.oid AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA())
+		WHERE a.attnum > 0 -- hide internal columns
+		AND NOT a.attisdropped -- hide deleted columns
+		AND b.relname = 'subscriptions'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.697ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.617ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'user_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.599ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'plan_id') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.514ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'status') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.671ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'starts_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.691ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'ends_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.348ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'created_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[2.522ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'updated_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.034ms] [34;1m[rows:0][0m SELECT description FROM pg_catalog.pg_description WHERE objsubid = (SELECT ordinal_position FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND column_name = 'deleted_at') AND objoid = (SELECT oid FROM pg_catalog.pg_class WHERE relname = 'subscriptions' AND relnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = CURRENT_SCHEMA()))
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[1.753ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND constraint_name = 'fk_subscriptions_plan'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.765ms] [34;1m[rows:1][0m SELECT count(*) FROM INFORMATION_SCHEMA.table_constraints WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'subscriptions' AND constraint_name = 'fk_subscriptions_user'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.444ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'subscriptions' AND indexname = 'idx_subscriptions_user_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.365ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'subscriptions' AND indexname = 'idx_subscriptions_plan_id' AND schemaname = CURRENT_SCHEMA()
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:47
+[0m[33m[0.345ms] [34;1m[rows:1][0m SELECT count(*) FROM pg_indexes WHERE tablename = 'subscriptions' AND indexname = 'idx_subscriptions_deleted_at' AND schemaname = CURRENT_SCHEMA()
+2026/07/22 14:20:11 Database auto-migration completed.
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[1.051ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'quiz:create'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[1.140ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'quiz:read'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[1.071ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'quiz:update'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[0.900ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'quiz:delete'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[0.569ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'room:control'
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:85
+[0m[33m[0.457ms] [34;1m[rows:1][0m SELECT count(*) FROM "permissions" WHERE name = 'logs:read'
+2026/07/22 14:20:11 Permissions seeded.
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:96
+[0m[33m[0.995ms] [34;1m[rows:6][0m SELECT * FROM "permissions"
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:104
+[0m[33m[1.211ms] [34;1m[rows:1][0m SELECT count(*) FROM "roles" WHERE name = 'host' AND "roles"."deleted_at" IS NULL
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:116
+[0m[33m[1.882ms] [34;1m[rows:6][0m SELECT * FROM "role_permissions" WHERE "role_permissions"."role_id" = 1
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:116
+[0m[33m[1.954ms] [34;1m[rows:6][0m SELECT * FROM "permissions" WHERE "permissions"."id" IN (1,2,3,4,5,6)
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:116
+[0m[33m[9.974ms] [34;1m[rows:1][0m SELECT * FROM "roles" WHERE name = 'host' AND "roles"."deleted_at" IS NULL ORDER BY "roles"."id" LIMIT 1
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:121
+[0m[33m[0.730ms] [34;1m[rows:1][0m SELECT count(*) FROM "roles" WHERE name = 'admin' AND "roles"."deleted_at" IS NULL
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:133
+[0m[33m[0.359ms] [34;1m[rows:6][0m SELECT * FROM "role_permissions" WHERE "role_permissions"."role_id" = 2
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:133
+[0m[33m[0.316ms] [34;1m[rows:6][0m SELECT * FROM "permissions" WHERE "permissions"."id" IN (1,2,3,4,5,6)
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:133
+[0m[33m[3.026ms] [34;1m[rows:1][0m SELECT * FROM "roles" WHERE name = 'admin' AND "roles"."deleted_at" IS NULL ORDER BY "roles"."id" LIMIT 1
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:249
+[0m[33m[1.007ms] [34;1m[rows:1][0m SELECT * FROM "pricing_plans" WHERE id = 'free' AND "pricing_plans"."deleted_at" IS NULL ORDER BY "pricing_plans"."id" LIMIT 1
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:249
+[0m[33m[0.697ms] [34;1m[rows:1][0m SELECT * FROM "pricing_plans" WHERE id = 'pro' AND "pricing_plans"."deleted_at" IS NULL ORDER BY "pricing_plans"."id" LIMIT 1
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:276
+[0m[33m[1.197ms] [34;1m[rows:1][0m SELECT * FROM "users" WHERE "users"."deleted_at" IS NULL
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:262
+[0m[33m[0.892ms] [34;1m[rows:1][0m SELECT count(*) FROM "subscriptions" WHERE user_id = 1 AND "subscriptions"."deleted_at" IS NULL
+
+2026/07/22 14:20:11 [32m/src/internal/db/postgres.go:191
+[0m[33m[1.798ms] [34;1m[rows:1][0m SELECT * FROM "users" WHERE email = 'buichthanh2468@gmail.com' AND "users"."deleted_at" IS NULL ORDER BY "users"."id" LIMIT 1
+2026/07/22 14:20:11 Redis connection established successfully.
+2026/07/22 14:20:11 Starting abandoned rooms cleanup worker...
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+[GIN-debug] GET    /health                   --> main.main.func1 (4 handlers)
+[GIN-debug] POST   /api/auth/login           --> github.com/kovio/backend/internal/handler.Login (5 handlers)
+[GIN-debug] POST   /api/auth/register        --> github.com/kovio/backend/internal/handler.Register (5 handlers)
+[GIN-debug] POST   /api/auth/verify-otp      --> github.com/kovio/backend/internal/handler.VerifyOTP (5 handlers)
+[GIN-debug] POST   /api/auth/refresh         --> github.com/kovio/backend/internal/handler.RefreshToken (5 handlers)
+[GIN-debug] POST   /api/auth/logout          --> github.com/kovio/backend/internal/handler.Logout (5 handlers)
+[GIN-debug] GET    /api/license/plans        --> github.com/kovio/backend/internal/handler.ListPlans (4 handlers)
+[GIN-debug] GET    /api/realtime/token       --> github.com/kovio/backend/internal/handler.GetRealtimeToken (4 handlers)
+[GIN-debug] GET    /api/realtime/player-token --> github.com/kovio/backend/internal/handler.GetPlayerRealtimeToken (4 handlers)
+[GIN-debug] POST   /api/rooms/join           --> github.com/kovio/backend/internal/handler.JoinRoom (5 handlers)
+[GIN-debug] POST   /api/rooms/submit-answer  --> github.com/kovio/backend/internal/handler.SubmitAnswer (4 handlers)
+[GIN-debug] GET    /api/rooms/public         --> github.com/kovio/backend/internal/handler.ListPublicRooms (4 handlers)
+[GIN-debug] GET    /api/rooms/pin/:pin       --> github.com/kovio/backend/internal/handler.GetRoomByPin (5 handlers)
+[GIN-debug] GET    /api/rooms/:id            --> github.com/kovio/backend/internal/handler.GetRoom (4 handlers)
+[GIN-debug] GET    /api/rooms/:id/questions/:index --> github.com/kovio/backend/internal/handler.GetPlayerQuestion (4 handlers)
+[GIN-debug] POST   /api/rooms/:id/leave      --> github.com/kovio/backend/internal/handler.LeaveRoom (4 handlers)
+[GIN-debug] GET    /api/auth/profile         --> github.com/kovio/backend/internal/handler.GetProfile (5 handlers)
+[GIN-debug] POST   /api/auth/change-password --> github.com/kovio/backend/internal/handler.ChangePassword (5 handlers)
+[GIN-debug] GET    /api/realtime/host-token  --> github.com/kovio/backend/internal/handler.GetRealtimeToken (5 handlers)
+[GIN-debug] GET    /api/license/me           --> github.com/kovio/backend/internal/handler.GetMyLicense (5 handlers)
+[GIN-debug] GET    /api/admin/license/plans  --> github.com/kovio/backend/internal/handler.AdminListPlans (6 handlers)
+[GIN-debug] PUT    /api/admin/license/plans/:id --> github.com/kovio/backend/internal/handler.AdminUpdatePlan (6 handlers)
+[GIN-debug] GET    /api/admin/license/subscriptions --> github.com/kovio/backend/internal/handler.AdminListSubscriptions (6 handlers)
+[GIN-debug] POST   /api/admin/license/assign --> github.com/kovio/backend/internal/handler.AdminAssignPlan (6 handlers)
+[GIN-debug] POST   /api/quizzes              --> github.com/kovio/backend/internal/handler.CreateQuiz (7 handlers)
+[GIN-debug] GET    /api/quizzes              --> github.com/kovio/backend/internal/handler.ListQuizzes (7 handlers)
+[GIN-debug] GET    /api/quizzes/:id          --> github.com/kovio/backend/internal/handler.GetQuiz (7 handlers)
+[GIN-debug] PUT    /api/quizzes/:id          --> github.com/kovio/backend/internal/handler.UpdateQuiz (7 handlers)
+[GIN-debug] DELETE /api/quizzes/:id          --> github.com/kovio/backend/internal/handler.DeleteQuiz (7 handlers)
+[GIN-debug] POST   /api/rooms                --> github.com/kovio/backend/internal/handler.CreateRoom (7 handlers)
+[GIN-debug] PATCH  /api/rooms/:id/privacy    --> github.com/kovio/backend/internal/handler.UpdateRoomPrivacy (7 handlers)
+[GIN-debug] POST   /api/rooms/:id/start      --> github.com/kovio/backend/internal/handler.StartGame (7 handlers)
+[GIN-debug] POST   /api/rooms/:id/next       --> github.com/kovio/backend/internal/handler.NextQuestion (7 handlers)
+[GIN-debug] POST   /api/rooms/:id/end-question --> github.com/kovio/backend/internal/handler.EndQuestion (7 handlers)
+[GIN-debug] POST   /api/rooms/:id/end        --> github.com/kovio/backend/internal/handler.EndGame (7 handlers)
+[GIN-debug] POST   /api/templates            --> github.com/kovio/backend/internal/handler.CreateTemplate (7 handlers)
+[GIN-debug] GET    /api/templates            --> github.com/kovio/backend/internal/handler.ListTemplates (7 handlers)
+[GIN-debug] GET    /api/templates/:id        --> github.com/kovio/backend/internal/handler.GetTemplate (7 handlers)
+[GIN-debug] PUT    /api/templates/:id        --> github.com/kovio/backend/internal/handler.UpdateTemplate (7 handlers)
+[GIN-debug] DELETE /api/templates/:id        --> github.com/kovio/backend/internal/handler.DeleteTemplate (7 handlers)
+[GIN-debug] GET    /api/logs                 --> github.com/kovio/backend/internal/handler.ListLogs (7 handlers)
+[GIN-debug] GET    /api/logs/:id             --> github.com/kovio/backend/internal/handler.GetRoomLogs (7 handlers)
+[GIN-debug] GET    /api/logs/:id/export      --> github.com/kovio/backend/internal/handler.ExportRoomLogs (7 handlers)
+2026/07/22 14:20:11 Kovio API Gateway running on port 8082
+[GIN-debug] [WARNING] You trusted all proxies, this is NOT safe. We recommend you to set a value.
+Please check https://pkg.go.dev/github.com/gin-gonic/gin#readme-don-t-trust-all-proxies for details.
+[GIN-debug] Listening and serving HTTP on :8082
+[GIN] 2026/07/22 - 14:20:12 | 200 |     845.023µs |       127.0.0.1 | GET      "/health"
+2026/07/22 14:20:18 [CRON] Checking for abandoned rooms...
+
+2026/07/22 14:20:18 [32m/src/internal/cron/cron.go:35
+[0m[33m[32.028ms] [34;1m[rows:0][0m SELECT * FROM "rooms" WHERE ((status = 'waiting' OR status = 'active') AND updated_at < '2026-07-22 02:20:18.371') AND "rooms"."deleted_at" IS NULL
+2026/07/22 14:20:18 [CRON] No abandoned rooms found.
+./run.sh: line 6: 59375 Killed                  ./api-gateway

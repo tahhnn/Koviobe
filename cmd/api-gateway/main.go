@@ -1,0 +1,199 @@
+package main
+
+import (
+	"log"
+	"net/http"
+	"os"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/kovio/backend/internal/cache"
+	"github.com/kovio/backend/internal/config"
+	"github.com/kovio/backend/internal/cron"
+	"github.com/kovio/backend/internal/db"
+	"github.com/kovio/backend/internal/handler"
+	"github.com/kovio/backend/internal/middleware"
+	"github.com/kovio/backend/internal/realtime"
+)
+
+func main() {
+	log.Println("Starting Kovio API Gateway...")
+
+	// 1. Load Configurations
+	config.LoadConfig()
+
+	// 2. Initialize Services
+	db.InitPostgres()
+	db.AutoMigrate()
+	cache.InitRedis()
+	realtime.InitCentrifugo()
+	cron.StartCleanupWorker()
+
+	// 3. Setup Gin Engine
+	// [L-2 FIX] Default to release mode to suppress verbose debug logs in production.
+	// Override by setting GIN_MODE=debug in .env during local development.
+	if os.Getenv("GIN_MODE") == "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+	r := gin.Default()
+
+	// Enable CORS Middleware
+	r.Use(CORSMiddleware())
+
+	// Health Check
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
+	})
+
+	// 4. API Routes Setup
+	api := r.Group("/api")
+	{
+		// Public Authentication Routes (rate limited)
+		auth := api.Group("/auth")
+		auth.Use(middleware.AuthRateLimit())
+		{
+			auth.POST("/login", handler.Login)
+			auth.POST("/register", handler.Register)
+			auth.POST("/verify-otp", handler.VerifyOTP)
+			auth.POST("/refresh", handler.RefreshToken)
+			auth.POST("/logout", handler.Logout)
+		}
+
+		// Public plan catalog
+		api.GET("/license/plans", handler.ListPlans)
+
+		// Realtime tokens — require host JWT or player JWT (no open public minting)
+		api.GET("/realtime/token", handler.GetRealtimeToken)
+		api.GET("/realtime/player-token", handler.GetPlayerRealtimeToken)
+
+		// Public Player Room Joining & Actions
+		api.POST("/rooms/join", middleware.JoinRoomRateLimit(), handler.JoinRoom)
+		api.POST("/rooms/submit-answer", handler.SubmitAnswer)
+		api.GET("/rooms/public", handler.ListPublicRooms) // before /:id so "public" is not captured as id
+		api.GET("/rooms/pin/:pin", middleware.PinLookupRateLimit(), handler.GetRoomByPin)
+		api.GET("/rooms/:id", handler.GetRoom) // Auth handled inside handler (host JWT or player token)
+		api.GET("/rooms/:id/questions/:index", handler.GetPlayerQuestion)
+		api.POST("/rooms/:id/leave", handler.LeaveRoom)
+
+		// Private Routes (Requires Auth)
+		private := api.Group("")
+		private.Use(middleware.AuthMiddleware())
+		{
+			// Host Profile
+			private.GET("/auth/profile", handler.GetProfile)
+			private.POST("/auth/change-password", handler.ChangePassword)
+			private.GET("/realtime/host-token", handler.GetRealtimeToken)
+
+			// License / subscription — hosts can only view their own entitlements.
+			// Plan changes are admin-only (no self-upgrade).
+			private.GET("/license/me", handler.GetMyLicense)
+
+			adminLicense := private.Group("/admin/license")
+			adminLicense.Use(middleware.RequireRole("admin"))
+			{
+				adminLicense.GET("/plans", handler.AdminListPlans)
+				adminLicense.PUT("/plans/:id", handler.AdminUpdatePlan)
+				adminLicense.GET("/subscriptions", handler.AdminListSubscriptions)
+				adminLicense.POST("/assign", handler.AdminAssignPlan)
+			}
+
+		adminUsers := private.Group("/admin/users")
+		adminUsers.Use(middleware.RequireRole("admin"))
+		{
+			adminUsers.GET("", handler.AdminListUsers)
+			adminUsers.PATCH("/:id/role", handler.AdminUpdateUserRole)
+			adminUsers.PATCH("/:id/status", handler.AdminUpdateUserStatus)
+		}
+
+		// Quiz & Question Management (Host/Admin)
+		quizzes := private.Group("/quizzes")
+			quizzes.Use(middleware.RequireRole("host", "admin"))
+			{
+				quizzes.POST("", middleware.RequirePermission("quiz:create"), handler.CreateQuiz)
+				quizzes.GET("", middleware.RequirePermission("quiz:read"), handler.ListQuizzes)
+				quizzes.GET("/:id", middleware.RequirePermission("quiz:read"), handler.GetQuiz)
+				quizzes.PUT("/:id", middleware.RequirePermission("quiz:update"), handler.UpdateQuiz)
+				quizzes.DELETE("/:id", middleware.RequirePermission("quiz:delete"), handler.DeleteQuiz)
+			}
+
+			// Room Control Management (Host/Admin)
+			rooms := private.Group("/rooms")
+			rooms.Use(middleware.RequireRole("host", "admin"))
+			{
+				rooms.POST("", middleware.RequirePermission("room:control"), handler.CreateRoom)
+				rooms.PATCH("/:id/privacy", middleware.RequirePermission("room:control"), handler.UpdateRoomPrivacy)
+				rooms.POST("/:id/start", middleware.RequirePermission("room:control"), handler.StartGame)
+				rooms.POST("/:id/next", middleware.RequirePermission("room:control"), handler.NextQuestion)
+				rooms.POST("/:id/end-question", middleware.RequirePermission("room:control"), handler.EndQuestion)
+				rooms.POST("/:id/end", middleware.RequirePermission("room:control"), handler.EndGame)
+			}
+
+			// Question Bank (Template packs) — save/remix questions into Quizzes
+			templates := private.Group("/templates")
+			templates.Use(middleware.RequireRole("host", "admin"))
+			{
+				templates.POST("", middleware.RequirePermission("quiz:create"), handler.CreateTemplate)
+				templates.POST("/from-quiz/:quizId", middleware.RequirePermission("quiz:create"), handler.CreateTemplateFromQuiz)
+				templates.GET("", middleware.RequirePermission("quiz:read"), handler.ListTemplates)
+				templates.GET("/:id", middleware.RequirePermission("quiz:read"), handler.GetTemplate)
+				templates.PUT("/:id", middleware.RequirePermission("quiz:update"), handler.UpdateTemplate)
+				templates.POST("/:id/instantiate", middleware.RequirePermission("quiz:create"), handler.InstantiateTemplate)
+				templates.POST("/:id/import", middleware.RequirePermission("quiz:update"), handler.ImportBankQuestions)
+				templates.DELETE("/:id", middleware.RequirePermission("quiz:delete"), handler.DeleteTemplate)
+			}
+
+			// Play History & Reporting (Host/Admin)
+			logs := private.Group("/logs")
+			logs.Use(middleware.RequireRole("host", "admin"))
+			{
+				logs.GET("", middleware.RequirePermission("logs:read"), handler.ListLogs)
+				logs.GET("/:id", middleware.RequirePermission("logs:read"), handler.GetRoomLogs)
+				logs.GET("/:id/export", middleware.RequirePermission("logs:read"), handler.ExportRoomLogs)
+			}
+		}
+	}
+
+	// 5. Start Server
+	port := config.AppConfig.Port
+	log.Printf("Kovio API Gateway running on port %s", port)
+	if err := r.Run(":" + port); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
+	}
+}
+
+// CORSMiddleware enforces a strict origin whitelist from CORS_ORIGINS env
+// (comma-separated), with safe localhost defaults for local development.
+func CORSMiddleware() gin.HandlerFunc {
+	allowedOrigins := map[string]bool{
+		"http://localhost:3000":  true,
+		"http://localhost:5173":  true,
+		"http://127.0.0.1:3000": true,
+	}
+	if extra := os.Getenv("CORS_ORIGINS"); extra != "" {
+		for _, o := range strings.Split(extra, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedOrigins[o] = true
+			}
+		}
+	}
+
+	return func(c *gin.Context) {
+		origin := c.Request.Header.Get("Origin")
+
+		if allowedOrigins[origin] {
+			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
+			c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Player-Token")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+
+		c.Next()
+	}
+}
