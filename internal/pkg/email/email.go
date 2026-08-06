@@ -6,7 +6,7 @@ import (
 	"net/smtp"
 	"time"
 
-	"github.com/kovio/backend/internal/config"
+	"github.com/quizzzone/backend/internal/config"
 )
 
 // SendEmail sends a real email to the recipient via SMTP.
@@ -24,7 +24,7 @@ func SendEmail(to string, subject string, htmlBody string) error {
 	toHeader := fmt.Sprintf("To: %s\n", to)
 	subjectHeader := fmt.Sprintf("Subject: %s\n", subject)
 	dateHeader := fmt.Sprintf("Date: %s\n", time.Now().Format(time.RFC1123Z))
-	msgIDHeader := fmt.Sprintf("Message-ID: <%d-%s@kovio>\n", time.Now().UnixNano(), cfg.SMTPEmail)
+	msgIDHeader := fmt.Sprintf("Message-ID: <%d-%s@quizzzone>\n", time.Now().UnixNano(), cfg.SMTPEmail)
 	mimeHeader := "MIME-version: 1.0;\nContent-Type: text/html; charset=\"UTF-8\";\n\n"
 
 	msg := []byte(fromHeader + toHeader + subjectHeader + dateHeader + msgIDHeader + mimeHeader + htmlBody)

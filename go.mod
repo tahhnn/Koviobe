@@ -1,4 +1,4 @@
-module github.com/kovio/backend
+module github.com/quizzzone/backend
 
 go 1.25
 

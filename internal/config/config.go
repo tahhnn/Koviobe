@@ -52,7 +52,7 @@ func LoadConfig() {
 		DBPort:           getEnv("DB_PORT", "5432"),
 		DBUser:           getEnv("DB_USER", "postgres"),
 		DBPassword:       dbPassword,
-		DBName:           getEnv("DB_NAME", "kovio"),
+		DBName:           getEnv("DB_NAME", "quizzzone"),
 		DBSSLMode:        getEnv("DB_SSLMODE", defaultSSLMode(appEnv)),
 		RedisAddr:        getEnv("REDIS_ADDR", "localhost:6379"),
 		RedisPassword:    getEnv("REDIS_PASSWORD", ""),

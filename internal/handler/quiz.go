@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
-	"github.com/kovio/backend/internal/pkg/audit"
-	"github.com/kovio/backend/internal/pkg/jwt"
-	"github.com/kovio/backend/internal/pkg/license"
-	"github.com/kovio/backend/internal/realtime"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/audit"
+	"github.com/quizzzone/backend/internal/pkg/jwt"
+	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/realtime"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -35,7 +35,7 @@ type QuestionReq struct {
 	ID            uint        `json:"id"`
 	Content       string      `json:"content" binding:"required"`
 	// [M-5 FIX] Restrict type to known values; duration 5-120s; points 0-2000
-	Type          string      `json:"type" binding:"required,oneof=multiple_choice true_false short_answer slider pin_answer puzzle poll"`
+	Type          string      `json:"type" binding:"required,oneof=multiple_choice true_false short_answer pin_answer poll"`
 	Options       interface{} `json:"options"`
 	CorrectAnswer string      `json:"correct_answer" binding:"required"`
 	Duration      int         `json:"duration" binding:"min=5,max=120"`
@@ -612,6 +612,14 @@ func NextQuestion(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
 		return
 	}
+	if room.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		return
+	}
+	if roomGameMode(room.ThemeConfig) == "player_paced" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Host question controls are not available in solo mode"})
+		return
+	}
 
 	var quiz model.Quiz
 	db.DB.Preload("Questions", func(db *gorm.DB) *gorm.DB {
@@ -632,8 +640,7 @@ func NextQuestion(c *gin.Context) {
 	room.QuestionActiveUntil = &activeUntil
 	db.DB.Save(&room)
 
-	var options interface{}
-	json.Unmarshal([]byte(activeQuestion.Options), &options)
+	options := sanitizePlayerOptions(activeQuestion.Options)
 
 	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:active", gin.H{
 		"question_id":  activeQuestion.ID,
@@ -668,11 +675,41 @@ func parsePinCoords(raw string) (x, y float64, ok bool) {
 	return x, y, true
 }
 
+// sanitizePlayerOptions strips answer-key fields so players cannot cheat from the payload.
+func sanitizePlayerOptions(raw string) interface{} {
+	var opts []map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &opts); err != nil {
+		var any interface{}
+		_ = json.Unmarshal([]byte(raw), &any)
+		return any
+	}
+	for i := range opts {
+		delete(opts[i], "isCorrect")
+		delete(opts[i], "is_correct")
+	}
+	return opts
+}
+
+func roomGameMode(themeConfig string) string {
+	var cfg struct {
+		GameMode string `json:"game_mode"`
+	}
+	_ = json.Unmarshal([]byte(themeConfig), &cfg)
+	return cfg.GameMode
+}
+
 // evaluateAnswer scores a submission. pin_answer uses % distance tolerance (default 8%).
+// poll never awards correctness. short_answer / true_false / multiple_choice use EqualFold.
 func evaluateAnswer(question model.Question, selected string) bool {
 	selected = strings.TrimSpace(selected)
 	correct := strings.TrimSpace(question.CorrectAnswer)
+	if selected == "" {
+		return false
+	}
 	switch question.Type {
+	case "poll":
+		// Opinion collection only — never scored as correct/incorrect.
+		return false
 	case "pin_answer":
 		cx, cy, okC := parsePinCoords(correct)
 		sx, sy, okS := parsePinCoords(selected)
@@ -686,6 +723,7 @@ func evaluateAnswer(question model.Question, selected string) bool {
 	case "short_answer":
 		return strings.EqualFold(correct, selected)
 	default:
+		// multiple_choice, true_false: compare option id (A/B/…)
 		return strings.EqualFold(correct, selected)
 	}
 }
@@ -903,19 +941,73 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	_ = realtime.Client.Publish(realtime.RoomChannel(room.PinCode), "player:answered", gin.H{
-		"player_id":      player.ID,
-		"nickname":       player.Nickname,
-		"score":          finalScore,
-		"points_earned":  pointsEarned,
-		"is_correct":     isCorrect,
-	})
+	answeredPayload := gin.H{
+		"player_id":     player.ID,
+		"nickname":      player.Nickname,
+		"score":         finalScore,
+		"points_earned": pointsEarned,
+		"question_type": question.Type,
+	}
+	if question.Type != "poll" {
+		answeredPayload["is_correct"] = isCorrect
+	}
+	_ = realtime.Client.Publish(realtime.RoomChannel(room.PinCode), "player:answered", answeredPayload)
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"is_correct":    isCorrect,
 		"points_earned": pointsEarned,
 		"score":         finalScore,
-	})
+		"question_type": question.Type,
+	}
+	if question.Type == "poll" {
+		resp["is_correct"] = false
+		resp["recorded"] = true
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// pollOptionStats tallies AnswerLog rows for a poll question into a per-option
+// vote count + percentage breakdown, ordered the same as the question's options.
+func pollOptionStats(questionID uint, optionsJSON string) ([]gin.H, int) {
+	var opts []struct {
+		ID   string `json:"id"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal([]byte(optionsJSON), &opts)
+
+	type voteCount struct {
+		SelectedOption string
+		Count          int
+	}
+	var counts []voteCount
+	db.DB.Model(&model.AnswerLog{}).
+		Select("selected_option, count(*) as count").
+		Where("question_id = ?", questionID).
+		Group("selected_option").
+		Scan(&counts)
+
+	countByOption := make(map[string]int, len(counts))
+	total := 0
+	for _, c := range counts {
+		countByOption[c.SelectedOption] = c.Count
+		total += c.Count
+	}
+
+	stats := make([]gin.H, 0, len(opts))
+	for _, o := range opts {
+		count := countByOption[o.ID]
+		percentage := 0
+		if total > 0 {
+			percentage = int(math.Round(float64(count) / float64(total) * 100))
+		}
+		stats = append(stats, gin.H{
+			"option_id":  o.ID,
+			"text":       o.Text,
+			"count":      count,
+			"percentage": percentage,
+		})
+	}
+	return stats, total
 }
 
 // EndQuestion closes the current question, reveals correct answer, and broadcasts leaderboard
@@ -927,6 +1019,14 @@ func EndQuestion(c *gin.Context) {
 	var room model.Room
 	if err := db.DB.Where("id = ? AND host_id = ?", uint(roomID), userID.(uint)).First(&room).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		return
+	}
+	if room.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		return
+	}
+	if roomGameMode(room.ThemeConfig) == "player_paced" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Host question controls are not available in solo mode"})
 		return
 	}
 
@@ -951,20 +1051,35 @@ func EndQuestion(c *gin.Context) {
 		Limit(5).
 		Scan(&leaderboard)
 
-	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:ended", gin.H{
-		"question_id":    question.ID,
-		"correct_answer": question.CorrectAnswer,
-		"leaderboard":    leaderboard,
-	})
+	endedPayload := gin.H{
+		"question_id": question.ID,
+		"type":        question.Type,
+		"leaderboard": leaderboard,
+	}
+	if question.Type != "poll" {
+		endedPayload["correct_answer"] = question.CorrectAnswer
+	} else {
+		optionStats, totalVotes := pollOptionStats(question.ID, question.Options)
+		endedPayload["option_stats"] = optionStats
+		endedPayload["total_votes"] = totalVotes
+	}
+	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:ended", endedPayload)
 
 	room.QuestionActiveUntil = nil
 	db.DB.Save(&room)
 
-	c.JSON(http.StatusOK, gin.H{
-		"message":        "Question ended",
-		"correct_answer": question.CorrectAnswer,
-		"leaderboard":    leaderboard,
-	})
+	resp := gin.H{
+		"message":     "Question ended",
+		"type":        question.Type,
+		"leaderboard": leaderboard,
+	}
+	if question.Type != "poll" {
+		resp["correct_answer"] = question.CorrectAnswer
+	} else {
+		resp["option_stats"] = endedPayload["option_stats"]
+		resp["total_votes"] = endedPayload["total_votes"]
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // EndGame finishes the room session
@@ -1282,14 +1397,24 @@ func GetRoom(c *gin.Context) {
 					currentPlayer.QuestionActiveUntil = &until
 					db.DB.Model(&currentPlayer).Update("question_active_until", until)
 				}
-				var options interface{}
-				json.Unmarshal([]byte(question.Options), &options)
+				qIndex := 0
+				var allQs []model.Question
+				if db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&allQs).Error == nil {
+					for i, q := range allQs {
+						if q.ID == question.ID {
+							qIndex = i
+							break
+						}
+					}
+				}
 				activeInfo := gin.H{
 					"id":       question.ID,
 					"content":  question.Content,
 					"type":     question.Type,
-					"options":  options,
+					"options":  sanitizePlayerOptions(question.Options),
 					"duration": question.Duration,
+					"index":    qIndex,
+					"total":    len(allQs),
 				}
 				if currentPlayer.QuestionActiveUntil != nil {
 					activeInfo["active_until"] = currentPlayer.QuestionActiveUntil.Format(time.RFC3339)
@@ -1417,21 +1542,35 @@ func GetPlayerQuestion(c *gin.Context) {
 	}
 
 	q := questions[index]
-	var options interface{}
-	_ = json.Unmarshal([]byte(q.Options), &options)
 
 	// Player-paced: start the timer when the player loads their current question
-	var roomConfig struct {
-		GameMode string `json:"game_mode"`
-	}
-	_ = json.Unmarshal([]byte(room.ThemeConfig), &roomConfig)
-	if roomConfig.GameMode == "player_paced" {
+	isPlayerPaced := roomGameMode(room.ThemeConfig) == "player_paced"
+	if isPlayerPaced {
 		var pl model.Player
-		if err := db.DB.First(&pl, pClaims.PlayerID).Error; err == nil {
-			if pl.CurrentQuestionID != nil && *pl.CurrentQuestionID == q.ID && pl.QuestionActiveUntil == nil {
-				until := time.Now().Add(time.Duration(q.Duration) * time.Second)
-				db.DB.Model(&pl).Update("question_active_until", until)
-			}
+		if err := db.DB.First(&pl, pClaims.PlayerID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
+			return
+		}
+		if pl.CurrentQuestionID == nil {
+			c.JSON(http.StatusGone, gin.H{"error": "NO_MORE_QUESTIONS"})
+			return
+		}
+		if *pl.CurrentQuestionID != q.ID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Question is not currently active"})
+			return
+		}
+		if pl.QuestionActiveUntil == nil {
+			until := time.Now().Add(time.Duration(q.Duration) * time.Second)
+			db.DB.Model(&pl).Update("question_active_until", until)
+		}
+	} else {
+		if room.Status != "active" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+			return
+		}
+		if room.CurrentQuestionIndex < 0 || index != room.CurrentQuestionIndex {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Question is not currently active"})
+			return
 		}
 	}
 
@@ -1440,7 +1579,7 @@ func GetPlayerQuestion(c *gin.Context) {
 		"quiz_id":  q.QuizID,
 		"content":  q.Content,
 		"type":     q.Type,
-		"options":  options,
+		"options":  sanitizePlayerOptions(q.Options),
 		"duration": q.Duration,
 		"order":    q.Order,
 		"index":    index,
@@ -1549,6 +1688,25 @@ func getRoomPlayers(roomID uint, status string) []model.Player {
 		}
 	} else {
 		db.DB.Where("room_id = ?", roomID).Find(&players)
+		
+		type PlayerCorrectCount struct {
+			PlayerID uint
+			Count    int
+		}
+		var counts []PlayerCorrectCount
+		db.DB.Model(&model.AnswerLog{}).
+			Select("player_id, count(*) as count").
+			Where("room_id = ? AND is_correct = ?", roomID, true).
+			Group("player_id").
+			Scan(&counts)
+
+		countMap := make(map[uint]int)
+		for _, c := range counts {
+			countMap[c.PlayerID] = c.Count
+		}
+		for i := range players {
+			players[i].CorrectAnswers = countMap[players[i].ID]
+		}
 	}
 	return players
 }

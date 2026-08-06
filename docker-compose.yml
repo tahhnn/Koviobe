@@ -3,33 +3,33 @@ version: '3.8'
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: kovio-postgres
+    container_name: quizzzone-postgres
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: kovio
+      POSTGRES_DB: quizzzone
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - kovio-network
+      - quizzzone-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d kovio"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d quizzzone"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: kovio-redis
+    container_name: quizzzone-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     command: redis-server --save 60 1 --loglevel warning
     networks:
-      - kovio-network
+      - quizzzone-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -38,7 +38,7 @@ services:
 
   centrifugo:
     image: centrifugo/centrifugo:v5
-    container_name: kovio-centrifugo
+    container_name: quizzzone-centrifugo
     ports:
       - "8000:8000"
     volumes:
@@ -48,32 +48,36 @@ services:
       redis:
         condition: service_healthy
     networks:
-      - kovio-network
+      - quizzzone-network
 
   backend:
     build: .
-    container_name: kovio-backend
+    container_name: quizzzone-backend
     ports:
       - "8082:8082"
     environment:
-      APP_ENV: development
-      PORT: 8082
-      JWT_SECRET: change_me_to_a_long_random_string
+      APP_ENV: ${APP_ENV:-development}
+      PORT: ${PORT:-8082}
+      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_string}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: postgres
-      DB_NAME: kovio
+      DB_NAME: quizzzone
       DB_SSLMODE: disable
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ""
       CENTRIFUGO_API_URL: http://centrifugo:8000/api
-      CENTRIFUGO_SECRET: change_me_centrifugo_hmac_secret
-      CENTRIFUGO_API_KEY: change_me_centrifugo_api_key
-      SEED_ADMIN_EMAIL: admin@kovio.local
-      SEED_ADMIN_PASSWORD: KovioAdmin!2026
-      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
-      GIN_MODE: release
+      CENTRIFUGO_SECRET: ${CENTRIFUGO_SECRET:-change_me_centrifugo_hmac_secret}
+      CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:-change_me_centrifugo_api_key}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@quizzzone.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-QuizzZoneAdmin!2026}
+      CORS_ORIGINS: http://localhost,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001
+      GIN_MODE: ${GIN_MODE:-release}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_EMAIL: ${SMTP_EMAIL:-buichthanh2468@gmail.com}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-tgjcjprewubkmgsg}
     depends_on:
       postgres:
         condition: service_healthy
@@ -82,12 +86,13 @@ services:
       centrifugo:
         condition: service_started
     networks:
-      - kovio-network
+      - quizzzone-network
 
 volumes:
   postgres_data:
   redis_data:
 
 networks:
-  kovio-network:
+  quizzzone-network:
+    name: quizzzone-network
     driver: bridge

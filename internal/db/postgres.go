@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kovio/backend/internal/config"
-	"github.com/kovio/backend/internal/model"
+	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/model"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -175,7 +175,7 @@ func seedDefaultData() {
 }
 
 // seedFixedAdmin creates/updates the platform admin account (idempotent).
-// Defaults: admin@kovio.local / KovioAdmin!2026 (override via SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD).
+// Defaults: admin@quizzzone.local / QuizzZoneAdmin!2026 (override via SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD).
 // Set SEED_ADMIN_RESET_PASSWORD=true to force-reset password on every boot.
 func seedFixedAdmin(adminRole model.Role) {
 	if adminRole.ID == 0 {
@@ -183,11 +183,11 @@ func seedFixedAdmin(adminRole model.Role) {
 	}
 	email := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
 	if email == "" {
-		email = "admin@kovio.local"
+		email = "admin@quizzzone.local"
 	}
 	password := os.Getenv("SEED_ADMIN_PASSWORD")
 	if password == "" {
-		password = "KovioAdmin!2026"
+		password = "QuizzZoneAdmin!2026"
 		log.Printf("SEED_ADMIN_PASSWORD unset — using default for %s (change in production).", email)
 	}
 	resetPassword := strings.EqualFold(os.Getenv("SEED_ADMIN_RESET_PASSWORD"), "true")

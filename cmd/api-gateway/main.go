@@ -7,17 +7,17 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/cache"
-	"github.com/kovio/backend/internal/config"
-	"github.com/kovio/backend/internal/cron"
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/handler"
-	"github.com/kovio/backend/internal/middleware"
-	"github.com/kovio/backend/internal/realtime"
+	"github.com/quizzzone/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/cron"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/handler"
+	"github.com/quizzzone/backend/internal/middleware"
+	"github.com/quizzzone/backend/internal/realtime"
 )
 
 func main() {
-	log.Println("Starting Kovio API Gateway...")
+	log.Println("Starting quizzZone API Gateway...")
 
 	// 1. Load Configurations
 	config.LoadConfig()
@@ -155,7 +155,7 @@ func main() {
 
 	// 5. Start Server
 	port := config.AppConfig.Port
-	log.Printf("Kovio API Gateway running on port %s", port)
+	log.Printf("quizzZone API Gateway running on port %s", port)
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}

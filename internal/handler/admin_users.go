@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
-	"github.com/kovio/backend/internal/pkg/audit"
-	"github.com/kovio/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/audit"
+	"github.com/quizzzone/backend/internal/pkg/license"
 )
 
 // AdminListUsers lists registered accounts (product Users + Admins) with license snapshot.
@@ -39,7 +39,7 @@ func AdminListUsers(c *gin.Context) {
 
 	seedEmail := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
 	if seedEmail == "" {
-		seedEmail = "admin@kovio.local"
+		seedEmail = "admin@quizzzone.local"
 	}
 
 	var users []model.User
@@ -120,7 +120,7 @@ func AdminUpdateUserRole(c *gin.Context) {
 
 	seedEmail := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
 	if seedEmail == "" {
-		seedEmail = "admin@kovio.local"
+		seedEmail = "admin@quizzzone.local"
 	}
 
 	var target model.User
@@ -199,7 +199,7 @@ func AdminUpdateUserStatus(c *gin.Context) {
 
 	seedEmail := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
 	if seedEmail == "" {
-		seedEmail = "admin@kovio.local"
+		seedEmail = "admin@quizzzone.local"
 	}
 
 	var target model.User

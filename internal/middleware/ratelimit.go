@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/cache"
 )
 
 // RateLimit enforces a per-IP (and optional suffix) rate limit via Redis.

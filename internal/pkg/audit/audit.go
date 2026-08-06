@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
 )
 
 // Record writes a security audit log to the database.

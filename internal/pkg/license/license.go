@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
 )
 
 const (

@@ -5,9 +5,10 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
-	"github.com/kovio/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/license"
+	"gorm.io/gorm"
 )
 
 // ListLogs retrieves play logs and session reports for rooms owned by the authenticated user.
@@ -35,7 +36,9 @@ func GetRoomLogs(c *gin.Context) {
 
 	// Verify room belongs to this user (room.host_id)
 	var room model.Room
-	if err := db.DB.Where("id = ? AND host_id = ?", uint(roomID), userID.(uint)).First(&room).Error; err != nil {
+	if err := db.DB.Preload("Quiz.Questions", func(db *gorm.DB) *gorm.DB {
+		return db.Order("questions.order ASC, questions.id ASC")
+	}).Where("id = ? AND host_id = ?", uint(roomID), userID.(uint)).First(&room).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room session not found"})
 		return
 	}

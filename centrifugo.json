@@ -4,8 +4,11 @@
   "admin_password": "change_me_admin_password",
   "admin_secret": "change_me_admin_secret",
   "allowed_origins": [
+    "http://localhost",
     "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "http://127.0.0.1:3000",
+    "https://*.trycloudflare.com",
+    "*"
   ],
   "engine": "redis",
   "redis_address": "redis:6379",

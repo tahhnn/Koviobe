@@ -1,6 +1,6 @@
-# Kovio Backend
+# quizzZone Backend
 
-Go API gateway for the Kovio quiz game platform. Uses PostgreSQL, Redis, and Centrifugo.
+Go API gateway for the quizzZone quiz game platform. Uses PostgreSQL, Redis, and Centrifugo.
 
 ## Quick start (Docker)
 

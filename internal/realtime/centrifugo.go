@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/kovio/backend/internal/config"
+	"github.com/quizzzone/backend/internal/config"
 )
 
 type CentrifugoClient struct {

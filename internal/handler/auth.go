@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kovio/backend/internal/cache"
-	"github.com/kovio/backend/internal/db"
-	"github.com/kovio/backend/internal/model"
-	"github.com/kovio/backend/internal/pkg/audit"
-	"github.com/kovio/backend/internal/pkg/email"
-	"github.com/kovio/backend/internal/pkg/jwt"
-	"github.com/kovio/backend/internal/pkg/license"
-	"github.com/kovio/backend/internal/realtime"
+	"github.com/quizzzone/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/db"
+	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/audit"
+	"github.com/quizzzone/backend/internal/pkg/email"
+	"github.com/quizzzone/backend/internal/pkg/jwt"
+	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/realtime"
 	"golang.org/x/crypto/bcrypt"
 )
 

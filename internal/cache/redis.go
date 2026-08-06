@@ -4,7 +4,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/kovio/backend/internal/config"
+	"github.com/quizzzone/backend/internal/config"
 	"github.com/redis/go-redis/v9"
 )
 

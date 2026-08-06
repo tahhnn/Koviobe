@@ -9,8 +9,8 @@ import (
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
-	"github.com/kovio/backend/internal/cache"
-	"github.com/kovio/backend/internal/config"
+	"github.com/quizzzone/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/config"
 )
 
 // Claims for authenticated Host/Admin users.
