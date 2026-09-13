@@ -17,7 +17,7 @@ type Permission struct {
 // Role represents a collection of permissions.
 type Role struct {
 	ID          uint           `gorm:"primaryKey" json:"id"`
-	Name        string         `gorm:"size:100;uniqueIndex;not null" json:"name"` // e.g. "admin", "host", "player"
+	Name        string         `gorm:"size:100;uniqueIndex;not null" json:"name"` // Account roles: "admin", "host"
 	Description string         `gorm:"size:255" json:"description"`
 	Permissions []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`

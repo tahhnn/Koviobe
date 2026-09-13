@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -174,7 +175,7 @@ func Register(c *gin.Context) {
 			</p>
 		</div>
 	`, otp)
-	
+
 	// We call email.SendEmail and log the output. We don't block registration on email failure to prevent API issues during temporary SMTP outages.
 	go func() {
 		_ = email.SendEmail(req.Email, "⚔️ QUIZBATTLE: Verify Your Account", htmlBody)
@@ -233,7 +234,7 @@ func VerifyOTP(c *gin.Context) {
 		return
 	}
 
-      // Soften OTP compare length mismatch without panic
+	// Soften OTP compare length mismatch without panic
 	otpMatch := len(otpData.OTP) == len(req.OTP) &&
 		subtle.ConstantTimeCompare([]byte(otpData.OTP), []byte(req.OTP)) == 1
 	if !otpMatch {
@@ -303,7 +304,7 @@ func VerifyOTP(c *gin.Context) {
 			</p>
 		</div>
 	`, generatedPassword)
-	
+
 	go func() {
 		_ = email.SendEmail(req.Email, "🎉 QUIZBATTLE: Your Temporary Password", pwdBody)
 	}()
@@ -336,8 +337,8 @@ func VerifyOTP(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"message": "Account verified and created successfully. Your temporary password has been sent to your email.",
-		"token":   token,
+		"message":       "Account verified and created successfully. Your temporary password has been sent to your email.",
+		"token":         token,
 		"refresh_token": refreshToken,
 		"user": gin.H{
 			"id":          newUser.ID,
@@ -388,6 +389,14 @@ func ChangePassword(c *gin.Context) {
 		return
 	}
 
+	// Refresh tokens issued before the change stay valid for their full 7 days
+	// otherwise, so anyone already holding one keeps renewing access — which
+	// defeats the point of changing the password. Logged rather than surfaced:
+	// the password change itself succeeded and must not be reported as failed.
+	if err := jwt.RevokeAllRefreshTokens(user.ID); err != nil {
+		log.Printf("[ChangePassword] failed to revoke refresh tokens for user %d: %v", user.ID, err)
+	}
+
 	// Record Audit Log
 	audit.Record(user.ID, "change_password", fmt.Sprintf("user_%d", user.ID), c.ClientIP())
 
@@ -413,6 +422,8 @@ func GetProfile(c *gin.Context) {
 func GetRealtimeToken(c *gin.Context) {
 	var clientID string
 	var channel string
+	// Channels granted on top of the room channel. Only the host gets any.
+	var extraChannels []string
 
 	if userIDVal, exists := c.Get("user_id"); exists {
 		roomIDStr := c.Query("room_id")
@@ -432,6 +443,11 @@ func GetRealtimeToken(c *gin.Context) {
 		}
 		clientID = fmt.Sprintf("user_%v", userIDVal)
 		channel = realtime.RoomChannel(room.PinCode)
+		// The host also needs the host-only channel that carries player:answered.
+		// Without it the socket connects, questions still flow, and the leaderboard
+		// silently stops updating — the same failure shape as a missing
+		// allowed_origins entry, and just as hard to spot.
+		extraChannels = append(extraChannels, realtime.HostChannel(room.PinCode))
 	} else {
 		playerTokenStr := c.GetHeader("X-Player-Token")
 		if playerTokenStr == "" {
@@ -443,16 +459,21 @@ func GetRealtimeToken(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired player token"})
 			return
 		}
-		var room model.Room
-		if err := db.DB.First(&room, claims.RoomID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		var player model.Player
+		if err := db.DB.Where("id = ? AND room_id = ? AND is_connected = ?", claims.PlayerID, claims.RoomID, true).First(&player).Error; err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Player session is no longer active"})
 			return
 		}
-		clientID = fmt.Sprintf("player_%d_%s", claims.PlayerID, claims.Nickname)
+		var room model.Room
+		if err := db.DB.Where("id = ? AND status != ?", claims.RoomID, "finished").First(&room).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Active room not found"})
+			return
+		}
+		clientID = fmt.Sprintf("player_%d_%s", player.ID, player.Nickname)
 		channel = realtime.RoomChannel(room.PinCode)
 	}
 
-	token, err := realtime.Client.GenerateConnectionToken(clientID, 3600, channel)
+	token, err := realtime.Client.GenerateConnectionToken(clientID, 3600, append([]string{channel}, extraChannels...)...)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate connection token"})
 		return
@@ -479,13 +500,18 @@ func GetPlayerRealtimeToken(c *gin.Context) {
 		return
 	}
 
+	var player model.Player
+	if err := db.DB.Where("id = ? AND room_id = ? AND is_connected = ?", claims.PlayerID, claims.RoomID, true).First(&player).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Player session is no longer active"})
+		return
+	}
 	var room model.Room
-	if err := db.DB.First(&room, claims.RoomID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+	if err := db.DB.Where("id = ? AND status != ?", claims.RoomID, "finished").First(&room).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Active room not found"})
 		return
 	}
 
-	clientID := fmt.Sprintf("player_%d_%s", claims.PlayerID, claims.Nickname)
+	clientID := fmt.Sprintf("player_%d_%s", player.ID, player.Nickname)
 	channel := realtime.RoomChannel(room.PinCode)
 	token, err := realtime.Client.GenerateConnectionToken(clientID, 3600, channel)
 	if err != nil {

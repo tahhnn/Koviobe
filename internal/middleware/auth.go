@@ -35,8 +35,11 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Role.Permissions must be preloaded — the authorization decision below reads
+		// them off this row, and without the preload user.Role is nil and every
+		// caller silently degrades to no role and no permissions.
 		var user model.User
-		if err := db.DB.First(&user, claims.UserID).Error; err != nil {
+		if err := db.DB.Preload("Role.Permissions").First(&user, claims.UserID).Error; err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
 			c.Abort()
 			return
@@ -47,11 +50,24 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		// Role and permissions come from the freshly loaded user row, not from the
+		// token claims. Reading them from the claims kept a demoted or
+		// permission-stripped user at their old level until the 15-minute access
+		// token expired; the DB is authoritative and is already in hand here.
+		role := "player"
+		var permissions []string
+		if user.Role != nil {
+			role = user.Role.Name
+			for _, perm := range user.Role.Permissions {
+				permissions = append(permissions, perm.Name)
+			}
+		}
+
 		// Set variables to Gin Context
-		c.Set("user_id", claims.UserID)
-		c.Set("email", claims.Email)
-		c.Set("role", claims.Role)
-		c.Set("permissions", claims.Permissions)
+		c.Set("user_id", user.ID)
+		c.Set("email", user.Email)
+		c.Set("role", role)
+		c.Set("permissions", permissions)
 
 		c.Next()
 	}

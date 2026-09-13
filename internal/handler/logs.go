@@ -63,7 +63,7 @@ func ExportRoomLogs(c *gin.Context) {
 	uid := userID.(uint)
 
 	ents, err := license.GetEntitlements(uid)
-	if err != nil || (license.EnforcementEnabled && !ents.AllowExportLogs) {
+	if err != nil || (license.Enforcing() && !ents.AllowExportLogs) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "Exporting detailed logs requires Pro plan",
 			"feature": "allow_export_logs",
@@ -90,10 +90,10 @@ func ExportRoomLogs(c *gin.Context) {
 	players := getRoomPlayers(room.ID, room.Status)
 
 	c.JSON(http.StatusOK, gin.H{
-		"room":     room,
-		"players":  players,
-		"answers":  answers,
-		"format":   "json",
-		"plan_id":  ents.PlanID,
+		"room":    room,
+		"players": players,
+		"answers": answers,
+		"format":  "json",
+		"plan_id": ents.PlanID,
 	})
 }

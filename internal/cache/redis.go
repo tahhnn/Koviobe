@@ -16,7 +16,7 @@ func InitRedis() {
 	RDB = redis.NewClient(&redis.Options{
 		Addr:     cfg.RedisAddr,
 		Password: cfg.RedisPassword, // Use password from config
-		DB:       0,                // use default DB
+		DB:       0,                 // use default DB
 	})
 
 	// Test connection

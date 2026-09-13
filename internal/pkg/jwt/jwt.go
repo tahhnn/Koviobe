@@ -99,11 +99,51 @@ func GenerateRefreshToken(userID uint) (string, error) {
 		return "", fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
+	// Index the JTI under the user so the whole set can be revoked at once. The
+	// set's TTL is refreshed on every issue; stale members are harmless because
+	// revocation deletes by key and a missing key is already invalid.
+	setKey := userRefreshSetKey(userID)
+	if err := cache.RDB.SAdd(ctx, setKey, jti).Err(); err != nil {
+		return "", fmt.Errorf("failed to index refresh token: %w", err)
+	}
+	cache.RDB.Expire(ctx, setKey, ttl)
+
 	return tokenString, nil
 }
 
 func refreshKey(jti string) string {
 	return "refresh:" + jti
+}
+
+// userRefreshSetKey indexes every live refresh JTI for a user, so the whole set
+// can be revoked at once. Without it a password change or a deactivation left
+// existing refresh tokens valid for their full 7 days.
+func userRefreshSetKey(userID uint) string {
+	return fmt.Sprintf("refresh_user:%d", userID)
+}
+
+// RevokeAllRefreshTokens invalidates every outstanding refresh token for a user.
+// Call it whenever the account's security state changes: password change,
+// deactivation, or a role change that should not survive in an old session.
+func RevokeAllRefreshTokens(userID uint) error {
+	ctx := context.Background()
+	setKey := userRefreshSetKey(userID)
+
+	jtis, err := cache.RDB.SMembers(ctx, setKey).Result()
+	if err != nil {
+		return fmt.Errorf("read refresh token set for user %d: %w", userID, err)
+	}
+
+	keys := make([]string, 0, len(jtis)+1)
+	for _, jti := range jtis {
+		keys = append(keys, refreshKey(jti))
+	}
+	keys = append(keys, setKey)
+
+	if err := cache.RDB.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("revoke refresh tokens for user %d: %w", userID, err)
+	}
+	return nil
 }
 
 // RevokeRefreshToken removes a refresh token JTI from Redis (logout / rotation).
@@ -112,7 +152,9 @@ func RevokeRefreshToken(tokenString string) {
 	if err != nil || claims.ID == "" {
 		return
 	}
-	_ = cache.RDB.Del(context.Background(), refreshKey(claims.ID)).Err()
+	ctx := context.Background()
+	_ = cache.RDB.Del(ctx, refreshKey(claims.ID)).Err()
+	_ = cache.RDB.SRem(ctx, userRefreshSetKey(claims.UserID), claims.ID).Err()
 }
 
 func parseRefreshClaims(tokenString string) (*Claims, error) {

@@ -42,6 +42,11 @@ func GetMyLicense(c *gin.Context) {
 		"subscription": sub,
 		"entitlements": ents,
 		"usage":        usage,
+		// Whether the gates are actually armed. The admin console used to state
+		// this from a hardcoded string, which went stale the moment enforcement
+		// was switched on — and an admin reading "enforcement is off" while it is
+		// on will misjudge what a deploy does to their hosts.
+		"enforcement": license.Enforcing(),
 	})
 }
 
@@ -76,7 +81,7 @@ func AdminListSubscriptions(c *gin.Context) {
 		Status             string     `json:"status"`
 		StartsAt           time.Time  `json:"starts_at"`
 		EndsAt             *time.Time `json:"ends_at,omitempty"`
-		Lifetime              bool       `json:"lifetime"`
+		Lifetime           bool       `json:"lifetime"`
 		MaxPlayers         int        `json:"max_players_per_room"`
 		AllowPlayerPaced   bool       `json:"allow_player_paced"`
 		MaxConcurrentRooms int        `json:"max_concurrent_rooms"`
@@ -165,10 +170,13 @@ func AdminUpdatePlan(c *gin.Context) {
 //	{ "user_id": 1, "plan_id": "free" }                     // revoke to Free
 func AdminAssignPlan(c *gin.Context) {
 	var req struct {
-		UserID     uint   `json:"user_id" binding:"required"`
-		PlanID     string `json:"plan_id" binding:"required"`
-		EndsAtDays *int   `json:"ends_at_days"`
-		Lifetime   bool   `json:"lifetime"`
+		UserID      uint   `json:"user_id" binding:"required"`
+		PlanID      string `json:"plan_id" binding:"required"`
+		EndsAtDays  *int   `json:"ends_at_days"`
+		Lifetime    bool   `json:"lifetime"`
+		AmountVND   int    `json:"amount_vnd"`
+		ExternalRef string `json:"external_ref"`
+		Note        string `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -188,13 +196,21 @@ func AdminAssignPlan(c *gin.Context) {
 		opts.EndsAtDays = &d
 	}
 
-	sub, err := license.AdminSetPlan(req.UserID, req.PlanID, opts)
+	adminID, _ := c.Get("user_id")
+
+	sub, err := license.AdminSetPlanWithContext(req.UserID, req.PlanID, opts, license.GrantContext{
+		Source:      license.SourceAdminAssign,
+		AmountVND:   req.AmountVND,
+		ExternalRef: strings.TrimSpace(req.ExternalRef),
+		ActorUserID: adminID.(uint),
+		Note:        strings.TrimSpace(req.Note),
+		IPAddress:   c.ClientIP(),
+	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	adminID, _ := c.Get("user_id")
 	audit.Record(adminID.(uint), "admin_assign_plan", "user_"+strconv.FormatUint(uint64(req.UserID), 10)+"_"+req.PlanID, c.ClientIP())
 
 	ents, _ := license.GetEntitlements(req.UserID)

@@ -28,6 +28,7 @@ func main() {
 	cache.InitRedis()
 	realtime.InitCentrifugo()
 	cron.StartCleanupWorker()
+	cron.StartLicenseExpiryWorker()
 
 	// 3. Setup Gin Engine
 	// [L-2 FIX] Default to release mode to suppress verbose debug logs in production.
@@ -36,6 +37,20 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := gin.Default()
+
+	// gin.Default() trusts every proxy, so ClientIP() — and with it the per-IP rate
+	// limits in middleware.RateLimit — comes straight from a client-supplied
+	// X-Forwarded-For. Trust only the gateway. TRUSTED_PROXIES is a comma-separated
+	// list of CIDRs; the default covers Docker's default bridge range. Keep it as
+	// narrow as the deployment allows — every trusted range is a range that can
+	// forge X-Forwarded-For.
+	trusted := strings.Split(getEnvOrDefault("TRUSTED_PROXIES", "172.16.0.0/12"), ",")
+	for i := range trusted {
+		trusted[i] = strings.TrimSpace(trusted[i])
+	}
+	if err := r.SetTrustedProxies(trusted); err != nil {
+		log.Fatalf("Invalid TRUSTED_PROXIES: %v", err)
+	}
 
 	// Enable CORS Middleware
 	r.Use(CORSMiddleware())
@@ -68,7 +83,7 @@ func main() {
 
 		// Public Player Room Joining & Actions
 		api.POST("/rooms/join", middleware.JoinRoomRateLimit(), handler.JoinRoom)
-		api.POST("/rooms/submit-answer", handler.SubmitAnswer)
+		api.POST("/rooms/submit-answer", middleware.SubmitAnswerRateLimit(), handler.SubmitAnswer)
 		api.GET("/rooms/public", handler.ListPublicRooms) // before /:id so "public" is not captured as id
 		api.GET("/rooms/pin/:pin", middleware.PinLookupRateLimit(), handler.GetRoomByPin)
 		api.GET("/rooms/:id", handler.GetRoom) // Auth handled inside handler (host JWT or player token)
@@ -87,6 +102,9 @@ func main() {
 			// License / subscription — hosts can only view their own entitlements.
 			// Plan changes are admin-only (no self-upgrade).
 			private.GET("/license/me", handler.GetMyLicense)
+			// Self-service activation: a host applies a prepaid code to their own
+			// account. Rate limited because the code is the only secret.
+			private.POST("/license/redeem", middleware.RedeemRateLimit(), handler.RedeemLicenseCode)
 
 			adminLicense := private.Group("/admin/license")
 			adminLicense.Use(middleware.RequireRole("admin"))
@@ -95,18 +113,25 @@ func main() {
 				adminLicense.PUT("/plans/:id", handler.AdminUpdatePlan)
 				adminLicense.GET("/subscriptions", handler.AdminListSubscriptions)
 				adminLicense.POST("/assign", handler.AdminAssignPlan)
+				adminLicense.POST("/codes", handler.AdminCreateLicenseCodes)
+				adminLicense.GET("/codes", handler.AdminListLicenseCodes)
+				adminLicense.POST("/codes/:code/revoke", handler.AdminRevokeLicenseCode)
+				adminLicense.GET("/redemptions", handler.AdminListRedemptions)
+				adminLicense.POST("/codes/send", handler.AdminSendLicenseCodes)
+				adminLicense.GET("/history", handler.AdminListSubscriptionHistory)
+				adminLicense.GET("/history.csv", handler.AdminExportSubscriptionHistory)
 			}
 
-		adminUsers := private.Group("/admin/users")
-		adminUsers.Use(middleware.RequireRole("admin"))
-		{
-			adminUsers.GET("", handler.AdminListUsers)
-			adminUsers.PATCH("/:id/role", handler.AdminUpdateUserRole)
-			adminUsers.PATCH("/:id/status", handler.AdminUpdateUserStatus)
-		}
+			adminUsers := private.Group("/admin/users")
+			adminUsers.Use(middleware.RequireRole("admin"))
+			{
+				adminUsers.GET("", handler.AdminListUsers)
+				adminUsers.PATCH("/:id/role", handler.AdminUpdateUserRole)
+				adminUsers.PATCH("/:id/status", handler.AdminUpdateUserStatus)
+			}
 
-		// Quiz & Question Management (Host/Admin)
-		quizzes := private.Group("/quizzes")
+			// Quiz & Question Management (Host/Admin)
+			quizzes := private.Group("/quizzes")
 			quizzes.Use(middleware.RequireRole("host", "admin"))
 			{
 				quizzes.POST("", middleware.RequirePermission("quiz:create"), handler.CreateQuiz)
@@ -165,8 +190,8 @@ func main() {
 // (comma-separated), with safe localhost defaults for local development.
 func CORSMiddleware() gin.HandlerFunc {
 	allowedOrigins := map[string]bool{
-		"http://localhost:3000":  true,
-		"http://localhost:5173":  true,
+		"http://localhost:3000": true,
+		"http://localhost:5173": true,
 		"http://127.0.0.1:3000": true,
 	}
 	if extra := os.Getenv("CORS_ORIGINS"); extra != "" {
@@ -196,4 +221,11 @@ func CORSMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+func getEnvOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

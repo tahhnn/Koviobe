@@ -5,8 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
+	"gorm.io/gorm"
 )
 
 const (
@@ -14,16 +16,19 @@ const (
 	PlanPro  = "pro"
 )
 
-// EnforcementEnabled controls whether Free/Pro limits actually block API actions.
+// Enforcing reports whether Free/Pro limits actually block API actions.
 //
-// LICENSE DEFERRED (2026-07): Product licensing (Free vs Pro gates) will be
-// developed later. Keep this false so hosts are not blocked by plan limits
-// (quiz count, questions/quiz, concurrent rooms, player cap, solo mode,
-// branding, export logs, templates). Plan catalog + admin assign APIs remain
-// for future work; re-enable by setting this to true.
+// Driven by LICENSE_ENFORCEMENT (config.AppConfig.LicenseEnforcement), so the
+// gates flip on a restart rather than a rebuild. Defaults to false: a config
+// that failed to load must not lock every host out of the product.
 //
-// See: LICENSE_DEFERRED.md in this package.
-const EnforcementEnabled = false
+// See: LICENSING.md in this package.
+func Enforcing() bool {
+	if config.AppConfig == nil {
+		return false
+	}
+	return config.AppConfig.LicenseEnforcement
+}
 
 // Entitlements is the resolved limit set for a host.
 type Entitlements struct {
@@ -55,7 +60,31 @@ type AssignOptions struct {
 	EndsAtDays *int
 }
 
-// openEntitlements unlocks all commercial gates while EnforcementEnabled is false.
+// Grant sources. Every subscription change records which of these caused it, so
+// the history can be read back as "who granted what, and on what authority".
+const (
+	SourceAdminAssign = "admin_assign"
+	SourceCodeRedeem  = "code_redeem"
+	SourceExpiryAuto  = "expiry_auto"
+)
+
+// GrantContext is the provenance written alongside a subscription change.
+//
+// Payment happens off-platform, so AmountVND and ExternalRef are the only link
+// between a plan we granted and money that arrived. They are carried, never
+// derived from the plan's list price: the price changes, and a later change must
+// not rewrite what a past customer paid.
+type GrantContext struct {
+	Source      string
+	SourceRef   string
+	AmountVND   int
+	ExternalRef string
+	ActorUserID uint
+	Note        string
+	IPAddress   string
+}
+
+// openEntitlements unlocks all commercial gates while enforcement is off.
 func openEntitlements() Entitlements {
 	return Entitlements{
 		PlanID:               "open",
@@ -73,15 +102,22 @@ func openEntitlements() Entitlements {
 	}
 }
 
+// defaultFreeEntitlements is the fallback used when the plan row cannot be read
+// (missing free plan, broken join). Free is the unlicensed tier: every limit is
+// zero, so an unpaid host creates nothing. The gates compare `count >= limit`,
+// and 0 >= 0 blocks from the first attempt.
+//
+// It is deliberately the same shape as the seeded free plan — if the two ever
+// drift, the seeded row wins, because entitlementsFromPlan is the normal path.
 func defaultFreeEntitlements() Entitlements {
 	return Entitlements{
 		PlanID:              PlanFree,
-		PlanName:            "Free",
-		MaxPlayersPerRoom:   20,
-		MaxQuizzes:          20,
-		MaxTemplates:        10,
-		MaxConcurrentRooms:  1,
-		MaxQuestionsPerQuiz: 30,
+		PlanName:            "Free (chưa kích hoạt)",
+		MaxPlayersPerRoom:   0,
+		MaxQuizzes:          0,
+		MaxTemplates:        0,
+		MaxConcurrentRooms:  0,
+		MaxQuestionsPerQuiz: 0,
 		AllowPlayerPaced:    false,
 		AllowCustomBranding: false,
 		AllowExportLogs:     false,
@@ -139,11 +175,22 @@ func DowngradeToFree(userID uint) error {
 	if err != nil {
 		return EnsureFreeSubscription(userID)
 	}
+	previousPlan := sub.PlanID
 	sub.PlanID = PlanFree
 	sub.Status = "active"
 	sub.StartsAt = now
 	sub.EndsAt = nil
-	return db.DB.Save(&sub).Error
+	if err := db.DB.Save(&sub).Error; err != nil {
+		return err
+	}
+	// A downgrade that leaves no trace looks identical to a plan that was never
+	// granted — which is exactly the question a support ticket asks.
+	if previousPlan == PlanFree {
+		return nil
+	}
+	var u model.User
+	_ = db.DB.First(&u, sub.UserID).Error
+	return recordEvent(db.DB, &sub, u.Email, previousPlan, GrantContext{Source: SourceExpiryAuto})
 }
 
 func isExpired(sub *model.Subscription) bool {
@@ -152,9 +199,9 @@ func isExpired(sub *model.Subscription) bool {
 
 // GetEntitlements resolves the active plan limits for a host.
 // Expired paid plans are downgraded in-place to Free (one subscription row per user).
-// When EnforcementEnabled is false, all hosts receive open entitlements (no Pro blocks).
+// When enforcement is off, all hosts receive open entitlements (no Pro blocks).
 func GetEntitlements(userID uint) (Entitlements, error) {
-	if !EnforcementEnabled {
+	if !Enforcing() {
 		return openEntitlements(), nil
 	}
 
@@ -212,13 +259,26 @@ func ResolveSubscription(userID uint) (*model.Subscription, Entitlements, error)
 //   - Free always has EndsAt = nil (lifetime free tier)
 //   - Paid plans: EndsAtDays nil → lifetime; EndsAtDays N → expires in N days
 func AdminSetPlan(userID uint, planID string, opts AssignOptions) (*model.Subscription, error) {
+	return AdminSetPlanWithContext(userID, planID, opts, GrantContext{Source: SourceAdminAssign})
+}
+
+// AdminSetPlanWithContext is AdminSetPlan with provenance for the history row.
+func AdminSetPlanWithContext(userID uint, planID string, opts AssignOptions, gc GrantContext) (*model.Subscription, error) {
+	return setPlanTx(db.DB, userID, planID, opts, gc)
+}
+
+// setPlanTx is the single writer for a user's subscription row. It takes the
+// gorm handle so a caller that is already inside a transaction — RedeemCode —
+// grants the plan atomically with the bookkeeping that justified the grant,
+// instead of committing the code use and then failing to apply the plan.
+func setPlanTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc GrantContext) (*model.Subscription, error) {
 	var plan model.PricingPlan
-	if err := db.DB.Where("id = ? AND is_active = ?", planID, true).First(&plan).Error; err != nil {
+	if err := tx.Where("id = ? AND is_active = ?", planID, true).First(&plan).Error; err != nil {
 		return nil, errors.New("plan not found or inactive")
 	}
 
 	var user model.User
-	if err := db.DB.First(&user, userID).Error; err != nil {
+	if err := tx.First(&user, userID).Error; err != nil {
 		return nil, errors.New("user not found")
 	}
 
@@ -236,7 +296,14 @@ func AdminSetPlan(userID uint, planID string, opts AssignOptions) (*model.Subscr
 	// else paid + EndsAtDays nil → lifetime license
 
 	var sub model.Subscription
-	err := db.DB.Where("user_id = ?", userID).First(&sub).Error
+	err := tx.Where("user_id = ?", userID).First(&sub).Error
+	// The subscription row is overwritten in place, so the plan being replaced has
+	// to be read before the write or it is gone.
+	previousPlan := ""
+	if err == nil {
+		previousPlan = sub.PlanID
+	}
+
 	if err != nil {
 		sub = model.Subscription{
 			UserID:   userID,
@@ -245,7 +312,7 @@ func AdminSetPlan(userID uint, planID string, opts AssignOptions) (*model.Subscr
 			StartsAt: now,
 			EndsAt:   endsAt,
 		}
-		if createErr := db.DB.Create(&sub).Error; createErr != nil {
+		if createErr := tx.Create(&sub).Error; createErr != nil {
 			return nil, createErr
 		}
 	} else {
@@ -253,12 +320,44 @@ func AdminSetPlan(userID uint, planID string, opts AssignOptions) (*model.Subscr
 		sub.Status = "active"
 		sub.StartsAt = now
 		sub.EndsAt = endsAt
-		if saveErr := db.DB.Save(&sub).Error; saveErr != nil {
+		if saveErr := tx.Save(&sub).Error; saveErr != nil {
 			return nil, saveErr
 		}
 	}
-	_ = db.DB.Preload("Plan").First(&sub, sub.ID)
+
+	// History shares the transaction with the grant: a plan that was applied but
+	// not recorded is a plan that cannot be reconciled against a payment.
+	if evErr := recordEvent(tx, &sub, user.Email, previousPlan, gc); evErr != nil {
+		return nil, evErr
+	}
+
+	_ = tx.Preload("Plan").First(&sub, sub.ID)
 	return &sub, nil
+}
+
+// recordEvent appends one immutable history row for a subscription change.
+func recordEvent(tx *gorm.DB, sub *model.Subscription, email, previousPlan string, gc GrantContext) error {
+	source := gc.Source
+	if source == "" {
+		source = SourceAdminAssign
+	}
+
+	return tx.Create(&model.SubscriptionEvent{
+		UserID:         sub.UserID,
+		Email:          email,
+		Action:         classifyAction(previousPlan, sub.PlanID, source),
+		Source:         source,
+		SourceRef:      gc.SourceRef,
+		PreviousPlanID: previousPlan,
+		PlanID:         sub.PlanID,
+		StartsAt:       sub.StartsAt,
+		EndsAt:         sub.EndsAt,
+		AmountVND:      gc.AmountVND,
+		ExternalRef:    gc.ExternalRef,
+		ActorUserID:    gc.ActorUserID,
+		Note:           gc.Note,
+		IPAddress:      gc.IPAddress,
+	}).Error
 }
 
 // UpdatePlanLimits lets admins tune plan numbers (e.g. max players).
@@ -318,4 +417,27 @@ func ThemeRequestsPlayerPaced(themeConfig string) bool {
 // IsUnlimited reports whether a limit value means unlimited (-1).
 func IsUnlimited(n int) bool {
 	return n < 0
+}
+
+// classifyAction names a subscription transition for reporting.
+//
+// Order matters: an expiry also lands on Free, so the source has to be checked
+// before the shape of the transition, or every lapse would be filed as an
+// admin downgrade and the two would be indistinguishable in a report.
+func classifyAction(previousPlan, newPlan, source string) string {
+	switch {
+	case source == SourceExpiryAuto:
+		return "expire"
+	case newPlan == PlanFree && previousPlan != "" && previousPlan != PlanFree:
+		return "downgrade"
+	case previousPlan == newPlan && previousPlan != "":
+		return "renew"
+	default:
+		return "grant"
+	}
+}
+
+// isRevenueAction reports whether an action can carry money.
+func isRevenueAction(action string) bool {
+	return action == "grant" || action == "renew"
 }
