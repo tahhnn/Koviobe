@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 type CentrifugoClient struct {
@@ -21,6 +22,18 @@ type CentrifugoClient struct {
 }
 
 var Client *CentrifugoClient
+
+// Publishes happen on every question transition and every answer submission, so
+// the client and its connection pool are shared. Building an http.Client per
+// call left every publish paying a fresh TCP handshake with no keep-alive reuse.
+var publishHTTPClient = &http.Client{
+	Timeout: 5 * time.Second,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     90 * time.Second,
+	},
+}
 
 func InitCentrifugo() {
 	cfg := config.AppConfig
@@ -57,6 +70,20 @@ func (c *CentrifugoClient) GenerateConnectionToken(userID string, ttlSeconds int
 // RoomChannel returns the Centrifugo channel name for a room PIN.
 func RoomChannel(pinCode string) string {
 	return fmt.Sprintf("rooms:%s", pinCode)
+}
+
+// HostChannel carries events only the host consumes.
+//
+// It sits inside the same "rooms" namespace so it inherits that namespace's
+// config (presence, join_leave, allow_subscribe_for_client=false) — a channel
+// outside it would fall back to Centrifugo's defaults and let any client
+// subscribe.
+//
+// A host token must be minted for BOTH this and RoomChannel; granting only one
+// fails silently, with the socket connected and the events simply never
+// arriving. See GetRealtimeToken in internal/handler/auth.go.
+func HostChannel(pinCode string) string {
+	return fmt.Sprintf("rooms:%s:host", pinCode)
 }
 
 // GameEvent defines the structure of real-time messages sent to clients
@@ -107,10 +134,10 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 	// Legacy header still accepted by Centrifugo
 	req.Header.Set("Authorization", fmt.Sprintf("apikey %s", c.apiKey))
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
-	resp, err := httpClient.Do(req)
+	resp, err := publishHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[Centrifugo] Publish request failed (%s): %v", url, err)
+		notify.P0("centrifugo_unreachable", "Không gọi được Centrifugo (%s): %v — phòng đang chơi sẽ đứng, host bấm Next mà người chơi không nhận được gì.", url, err)
 		return fmt.Errorf("failed to send request to Centrifugo: %v", err)
 	}
 	defer resp.Body.Close()
@@ -118,6 +145,7 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 	respBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Centrifugo] Publish non-OK status=%d body=%s url=%s", resp.StatusCode, string(respBytes), url)
+		notify.P0("centrifugo_status", "Centrifugo trả status=%d khi publish (%s): %s", resp.StatusCode, url, string(respBytes))
 		return fmt.Errorf("centrifugo api returned status %d: %s", resp.StatusCode, string(respBytes))
 	}
 
@@ -125,12 +153,13 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 	if len(respBytes) > 0 {
 		if err := json.Unmarshal(respBytes, &respBody); err == nil {
 			if centrifugoErr, ok := respBody["error"]; ok && centrifugoErr != nil {
-				log.Printf("[Centrifugo] API error on channel %s event %s: %v", channel, event, centrifugoErr)
+				log.Printf("[Centrifugo] API error while publishing event %s: %v", event, centrifugoErr)
+				notify.P0("centrifugo_api_error", "Centrifugo API báo lỗi khi publish event %q: %v", event, centrifugoErr)
 				return fmt.Errorf("centrifugo api error: %v", centrifugoErr)
 			}
 		}
 	}
 
-	log.Printf("[Centrifugo] Published '%s' → %s", event, channel)
+	log.Printf("[Centrifugo] Published event %q", event)
 	return nil
 }

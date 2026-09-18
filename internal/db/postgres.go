@@ -9,6 +9,7 @@ import (
 
 	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -19,8 +20,15 @@ var DB *gorm.DB
 
 func InitPostgres() {
 	cfg := config.AppConfig
-	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=Asia/Ho_Chi_Minh",
-		cfg.DBHost, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBPort, cfg.DBSSLMode)
+	// connect_timeout bounds the dial; statement_timeout bounds every query the
+	// pool runs, so a lock wait or a runaway scan cannot pin a request goroutine
+	// forever. Both are server-side backstops — they do not replace per-request
+	// context deadlines, they survive their absence.
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s connect_timeout=%d statement_timeout=%d",
+		cfg.DBHost, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBPort, cfg.DBSSLMode,
+		cfg.DBTimeZone, cfg.DBConnectTimeoutSec, cfg.DBStatementTimeoutMs,
+	)
 
 	logMode := logger.Warn
 	if cfg.AppEnv == "development" || os.Getenv("GIN_MODE") == "debug" {
@@ -32,10 +40,26 @@ func InitPostgres() {
 		Logger: logger.Default.LogMode(logMode),
 	})
 	if err != nil {
+		notify.Fatal("db_connect", "Không kết nối được PostgreSQL (%s:%s/%s): %v — container sẽ exit(1) và restart loop.",
+			cfg.DBHost, cfg.DBPort, cfg.DBName, err)
 		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 
-	log.Println("PostgreSQL connection established successfully.")
+	// Without these the pool is unbounded on open connections and holds only 2
+	// idle ones: under load the API both exhausts Postgres max_connections and
+	// churns through reconnects at the same time.
+	sqlDB, err := DB.DB()
+	if err != nil {
+		notify.Fatal("db_pool", "Không lấy được sql.DB để cấu hình pool: %v — container sẽ exit(1).", err)
+		log.Fatalf("Failed to access underlying sql.DB: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
+	sqlDB.SetConnMaxLifetime(time.Duration(cfg.DBConnMaxLifetimeMin) * time.Minute)
+	sqlDB.SetConnMaxIdleTime(time.Duration(cfg.DBConnMaxIdleMin) * time.Minute)
+
+	log.Printf("PostgreSQL connection established successfully (max_open=%d max_idle=%d statement_timeout=%dms).",
+		cfg.DBMaxOpenConns, cfg.DBMaxIdleConns, cfg.DBStatementTimeoutMs)
 }
 
 func AutoMigrate() {
@@ -58,8 +82,13 @@ func AutoMigrate() {
 		&model.AuditLog{},
 		&model.PricingPlan{},
 		&model.Subscription{},
+		&model.LicenseCode{},
+		&model.LicenseRedemption{},
+		&model.SubscriptionEvent{},
+		&model.SystemSetting{},
 	)
 	if err != nil {
+		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)
 		log.Fatalf("Auto migration failed: %v", err)
 	}
 
@@ -174,21 +203,22 @@ func seedDefaultData() {
 	}
 }
 
-// seedFixedAdmin creates/updates the platform admin account (idempotent).
-// Defaults: admin@quizzzone.local / QuizzZoneAdmin!2026 (override via SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD).
+// seedFixedAdmin creates/updates the optional platform bootstrap admin (idempotent).
+// Both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD are required to enable bootstrap.
 // Set SEED_ADMIN_RESET_PASSWORD=true to force-reset password on every boot.
 func seedFixedAdmin(adminRole model.Role) {
 	if adminRole.ID == 0 {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
-	if email == "" {
-		email = "admin@quizzzone.local"
-	}
 	password := os.Getenv("SEED_ADMIN_PASSWORD")
-	if password == "" {
-		password = "QuizzZoneAdmin!2026"
-		log.Printf("SEED_ADMIN_PASSWORD unset — using default for %s (change in production).", email)
+	if email == "" && password == "" {
+		log.Println("Admin bootstrap disabled; SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD are not set.")
+		return
+	}
+	if email == "" || password == "" {
+		log.Println("Admin bootstrap skipped; both SEED_ADMIN_EMAIL and SEED_ADMIN_PASSWORD are required.")
+		return
 	}
 	resetPassword := strings.EqualFold(os.Getenv("SEED_ADMIN_RESET_PASSWORD"), "true")
 
@@ -276,14 +306,14 @@ func seedPricingPlans() {
 	plans := []model.PricingPlan{
 		{
 			ID:                   "free",
-			Name:                 "Free",
-			Description:          "Dành cho host cá nhân / lớp học nhỏ. Giới hạn 20 người/phòng.",
+			Name:                 "Chưa kích hoạt",
+			Description:          "Tài khoản chưa mua dịch vụ. Liên hệ quản trị viên để được cấp gói.",
 			PriceMonthlyVND:      0,
-			MaxPlayersPerRoom:    20,
-			MaxQuizzes:           20,
-			MaxTemplates:         10,
-			MaxConcurrentRooms:   1,
-			MaxQuestionsPerQuiz:  30,
+			MaxPlayersPerRoom:    0,
+			MaxQuizzes:           0,
+			MaxTemplates:         0,
+			MaxConcurrentRooms:   0,
+			MaxQuestionsPerQuiz:  0,
 			AllowPlayerPaced:     false,
 			AllowCustomBranding:  false,
 			AllowExportLogs:      false,
@@ -295,9 +325,9 @@ func seedPricingPlans() {
 		{
 			ID:                   "pro",
 			Name:                 "Pro",
-			Description:          "Dành cho sự kiện / doanh nghiệp. Tới 200 người/phòng, không watermark, player-paced, export logs.",
+			Description:          "Dành cho sự kiện / doanh nghiệp. Tới 2000 người/phòng, không watermark, player-paced, export logs.",
 			PriceMonthlyVND:      199000,
-			MaxPlayersPerRoom:    200,
+			MaxPlayersPerRoom:    2000,
 			MaxQuizzes:           -1, // unlimited
 			MaxTemplates:         -1,
 			MaxConcurrentRooms:   10,
@@ -339,10 +369,24 @@ func ensureUserFreeSub(userID uint) error {
 	}).Error
 }
 
+// backfillFreeSubscriptions gives every user without a subscription the free
+// plan. It runs as a single set-based statement: the previous version loaded the
+// entire users table into memory and issued one or two queries per row on every
+// single boot, so startup cost and memory grew with the user count forever even
+// though this is a one-time migration.
 func backfillFreeSubscriptions() {
-	var users []model.User
-	DB.Find(&users)
-	for _, u := range users {
-		_ = ensureUserFreeSub(u.ID)
+	res := DB.Exec(`
+		INSERT INTO subscriptions (user_id, plan_id, status, starts_at, created_at, updated_at)
+		SELECT u.id, 'free', 'active', NOW(), NOW(), NOW()
+		FROM users u
+		WHERE u.deleted_at IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = u.id)
+	`)
+	if res.Error != nil {
+		log.Printf("Failed to backfill free subscriptions: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("Backfilled free subscriptions for %d user(s).", res.RowsAffected)
 	}
 }

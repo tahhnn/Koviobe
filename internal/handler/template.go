@@ -150,7 +150,7 @@ func checkTemplateQuota(uid uint) error {
 	}
 	var count int64
 	db.DB.Model(&model.Template{}).Where("host_id = ?", uid).Count(&count)
-	if license.EnforcementEnabled && !license.IsUnlimited(ents.MaxTemplates) && int(count) >= ents.MaxTemplates {
+	if license.Enforcing() && !license.IsUnlimited(ents.MaxTemplates) && int(count) >= ents.MaxTemplates {
 		return fmt.Errorf("Question bank limit reached (%d). Upgrade to Pro for more packs.", ents.MaxTemplates)
 	}
 	return nil
@@ -420,11 +420,11 @@ func InstantiateTemplate(c *gin.Context) {
 	}
 	var quizCount int64
 	db.DB.Model(&model.Quiz{}).Where("host_id = ?", uid).Count(&quizCount)
-	if license.EnforcementEnabled && !license.IsUnlimited(ents.MaxQuizzes) && int(quizCount) >= ents.MaxQuizzes {
+	if license.Enforcing() && !license.IsUnlimited(ents.MaxQuizzes) && int(quizCount) >= ents.MaxQuizzes {
 		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("Quiz limit reached (%d)", ents.MaxQuizzes)})
 		return
 	}
-	if license.EnforcementEnabled && !license.IsUnlimited(ents.MaxQuestionsPerQuiz) && len(bank) > ents.MaxQuestionsPerQuiz {
+	if license.Enforcing() && !license.IsUnlimited(ents.MaxQuestionsPerQuiz) && len(bank) > ents.MaxQuestionsPerQuiz {
 		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("Too many questions for plan (max %d)", ents.MaxQuestionsPerQuiz)})
 		return
 	}
@@ -547,7 +547,7 @@ func ImportBankQuestions(c *gin.Context) {
 	var existingCount int64
 	db.DB.Model(&model.Question{}).Where("quiz_id = ?", quiz.ID).Count(&existingCount)
 	newTotal := int(existingCount) + len(selected)
-	if license.EnforcementEnabled && !license.IsUnlimited(ents.MaxQuestionsPerQuiz) && newTotal > ents.MaxQuestionsPerQuiz {
+	if license.Enforcing() && !license.IsUnlimited(ents.MaxQuestionsPerQuiz) && newTotal > ents.MaxQuestionsPerQuiz {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": fmt.Sprintf("Would exceed question limit (%d on %s plan)", ents.MaxQuestionsPerQuiz, ents.PlanName),
 		})
@@ -593,9 +593,9 @@ func ImportBankQuestions(c *gin.Context) {
 
 	audit.Record(uid, "import_bank_questions", fmt.Sprintf("quiz_%d_from_template_%d_n%d", quiz.ID, template.ID, added), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{
-		"quiz_id":       quiz.ID,
-		"imported":      added,
-		"total_after":   int(existingCount) + added,
-		"template_id":   template.ID,
+		"quiz_id":     quiz.ID,
+		"imported":    added,
+		"total_after": int(existingCount) + added,
+		"template_id": template.ID,
 	})
 }

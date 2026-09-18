@@ -17,7 +17,7 @@ type Permission struct {
 // Role represents a collection of permissions.
 type Role struct {
 	ID          uint           `gorm:"primaryKey" json:"id"`
-	Name        string         `gorm:"size:100;uniqueIndex;not null" json:"name"` // e.g. "admin", "host", "player"
+	Name        string         `gorm:"size:100;uniqueIndex;not null" json:"name"` // Account roles: "admin", "host"
 	Description string         `gorm:"size:255" json:"description"`
 	Permissions []Permission   `gorm:"many2many:role_permissions;" json:"permissions,omitempty"`
 	CreatedAt   time.Time      `json:"created_at"`
@@ -54,17 +54,22 @@ type Quiz struct {
 
 // Question represents an individual query within a Quiz.
 type Question struct {
-	ID            uint      `gorm:"primaryKey" json:"id"`
-	QuizID        uint      `gorm:"index;not null" json:"quiz_id"`
-	Content       string    `gorm:"type:text;not null" json:"content"`
-	Type          string    `gorm:"size:50;not null;default:'multiple_choice'" json:"type"` // multiple_choice, true_false
-	Options       string    `gorm:"type:text;not null" json:"options"`                      // JSON array of options
-	CorrectAnswer string    `gorm:"size:50;not null" json:"correct_answer"`                 // e.g. "A"
-	Duration      int       `gorm:"default:20" json:"duration"`
-	Points        int       `gorm:"default:1000" json:"points"`
-	Order         int       `gorm:"default:0" json:"order"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            uint   `gorm:"primaryKey" json:"id"`
+	QuizID        uint   `gorm:"index;not null" json:"quiz_id"`
+	Content       string `gorm:"type:text;not null" json:"content"`
+	Type          string `gorm:"size:50;not null;default:'multiple_choice'" json:"type"` // multiple_choice, true_false
+	Options       string `gorm:"type:text;not null" json:"options"`                      // JSON array of options
+	CorrectAnswer string `gorm:"size:50;not null" json:"correct_answer"`                 // e.g. "A"
+	Duration      int    `gorm:"default:20" json:"duration"`
+	Points        int    `gorm:"default:1000" json:"points"`
+	Order         int    `gorm:"default:0" json:"order"`
+	// Explanation is the answer-explanation slide, stored as a JSON document
+	// ({v, layout, bg, overlay, elements[]}). Empty means the question has no
+	// slide, and every explanation step is skipped for it. It reveals the
+	// answer, so it must never be served before the player has submitted.
+	Explanation string    `gorm:"type:text" json:"explanation"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Template is a reusable question-bank pack (snapshot of questions).
@@ -87,6 +92,10 @@ type Room struct {
 	QuizID               uint           `gorm:"not null" json:"quiz_id"`
 	HostID               uint           `gorm:"not null" json:"host_id"`
 	Status               string         `gorm:"size:50;default:'waiting'" json:"status"` // waiting, active, finished
+	// EndedReason is why the room closed: "" (the host ended it, or solo mode
+	// finished), license_expired, license_revoked. No `default:` tag — "" is the
+	// meaningful normal case, and GORM omits zero values on columns that have one.
+	EndedReason          string         `gorm:"size:32" json:"ended_reason,omitempty"`
 	IsPrivate            bool           `gorm:"default:true;not null" json:"is_private"` // private = PIN-only; false = listed on open lobby
 	ThemeConfig          string         `gorm:"type:text" json:"theme_config"`           // Copied from Quiz or overridden for this room
 	CurrentQuestionID    *uint          `json:"current_question_id,omitempty"`
@@ -109,8 +118,12 @@ type Player struct {
 	CurrentQuestionID   *uint      `json:"current_question_id,omitempty"`
 	QuestionActiveUntil *time.Time `json:"question_active_until,omitempty"`
 	CorrectAnswers      int        `gorm:"-" json:"correct_answers"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	// AnsweredCount is how many questions this player has submitted, correct or
+	// not. Solo mode needs it: every player sits on a different question, so the
+	// host screen has no single "question 3 of 10" to show — progress is per row.
+	AnsweredCount int       `gorm:"-" json:"answered_count"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // AnswerLog records the submissions of players.

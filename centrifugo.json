@@ -1,14 +1,11 @@
 {
-  "token_hmac_secret_key": "change_me_centrifugo_hmac_secret",
-  "api_key": "change_me_centrifugo_api_key",
-  "admin_password": "change_me_admin_password",
-  "admin_secret": "change_me_admin_secret",
   "allowed_origins": [
     "http://localhost",
+    "http://localhost:8080",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "https://*.trycloudflare.com",
-    "*"
+    "http://localhost:8088",
+    "http://127.0.0.1:8088"
   ],
   "engine": "redis",
   "redis_address": "redis:6379",
@@ -17,7 +14,9 @@
       "name": "rooms",
       "presence": true,
       "join_leave": true,
-      "allow_subscribe_for_client": true
+      "allow_subscribe_for_client": false
     }
-  ]
+  ],
+  "admin": true,
+  "admin_insecure": false
 }

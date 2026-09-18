@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -10,7 +11,9 @@ import (
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/audit"
+	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 // AdminListUsers lists registered accounts (product Users + Admins) with license snapshot.
@@ -25,16 +28,16 @@ func AdminListUsers(c *gin.Context) {
 	}
 
 	type row struct {
-		ID           uint   `json:"id"`
-		Email        string `json:"email"`
-		Nickname     string `json:"nickname"`
-		Role         string `json:"role"`         // RBAC: host|admin
-		AccountType  string `json:"account_type"` // product: user|admin
-		PlanID       string `json:"plan_id"`
-		PlanName     string `json:"plan_name"`
-		IsActive     bool   `json:"is_active"`
-		IsSeedAdmin  bool   `json:"is_seed_admin"`
-		CreatedAt    string `json:"created_at"`
+		ID          uint   `json:"id"`
+		Email       string `json:"email"`
+		Nickname    string `json:"nickname"`
+		Role        string `json:"role"`         // RBAC: host|admin
+		AccountType string `json:"account_type"` // product: user|admin
+		PlanID      string `json:"plan_id"`
+		PlanName    string `json:"plan_name"`
+		IsActive    bool   `json:"is_active"`
+		IsSeedAdmin bool   `json:"is_seed_admin"`
+		CreatedAt   string `json:"created_at"`
 	}
 
 	seedEmail := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
@@ -57,6 +60,8 @@ func AdminListUsers(c *gin.Context) {
 		return
 	}
 
+	subs := subscriptionsByUser(users)
+
 	out := make([]row, 0, len(users))
 	for _, u := range users {
 		r := row{
@@ -77,9 +82,17 @@ func AdminListUsers(c *gin.Context) {
 				r.AccountType = "user"
 			}
 		}
-		ents, _ := license.GetEntitlements(u.ID)
-		r.PlanID = ents.PlanID
-		r.PlanName = ents.PlanName
+		// The STORED plan, not the resolved entitlement — see the comment on
+		// AdminListSubscriptions. GetEntitlements reports "open" for everyone
+		// while enforcement is off, which disabled this page's revoke button for
+		// every account.
+		r.PlanID = license.PlanFree
+		if sub := subs[u.ID]; sub != nil {
+			r.PlanID = sub.PlanID
+			if sub.Plan != nil {
+				r.PlanName = sub.Plan.Name
+			}
+		}
 		out = append(out, r)
 	}
 
@@ -186,13 +199,21 @@ func AdminUpdateUserStatus(c *gin.Context) {
 	}
 	targetID := uint(uid64)
 
+	// IsActive is a *bool, not a bool with binding:"required" — `required` rejects
+	// the zero value, so a plain bool made {"is_active": false} a 400 and left no
+	// way to deactivate an account at all. The pointer distinguishes absent from false.
 	var req struct {
-		IsActive bool `json:"is_active" binding:"required"`
+		IsActive *bool `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.IsActive == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "is_active is required"})
+		return
+	}
+	isActive := *req.IsActive
 
 	actorID, _ := c.Get("user_id")
 	actorUID := actorID.(uint)
@@ -209,18 +230,27 @@ func AdminUpdateUserStatus(c *gin.Context) {
 	}
 
 	// Never deactivate the fixed seeded admin account
-	if strings.EqualFold(target.Email, seedEmail) && !req.IsActive {
+	if strings.EqualFold(target.Email, seedEmail) && !isActive {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot deactivate the seeded system admin account"})
 		return
 	}
 
-	target.IsActive = req.IsActive
+	target.IsActive = isActive
 	if err := db.DB.Save(&target).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update user status"})
 		return
 	}
 
-	audit.Record(actorUID, "admin_update_user_status", "user_"+strconv.FormatUint(uint64(targetID), 10)+"_active_"+strconv.FormatBool(req.IsActive), c.ClientIP())
+	// Deactivation blocks new access tokens at the middleware, but an existing
+	// refresh token would still mint them for up to 7 days. Cut the sessions too.
+	if !isActive {
+		if err := jwt.RevokeAllRefreshTokens(target.ID); err != nil {
+			log.Printf("[AdminUpdateUserStatus] failed to revoke refresh tokens for user %d: %v", target.ID, err)
+			notify.P1("revoke_tokens_failed", "Khoá tài khoản nhưng không thu hồi được refresh token (user=%d): %v — phiên cũ vẫn dùng được.", target.ID, err)
+		}
+	}
+
+	audit.Record(actorUID, "admin_update_user_status", "user_"+strconv.FormatUint(uint64(targetID), 10)+"_active_"+strconv.FormatBool(isActive), c.ClientIP())
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":        target.ID,

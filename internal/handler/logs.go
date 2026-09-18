@@ -63,7 +63,15 @@ func ExportRoomLogs(c *gin.Context) {
 	uid := userID.(uint)
 
 	ents, err := license.GetEntitlements(uid)
-	if err != nil || (license.EnforcementEnabled && !ents.AllowExportLogs) {
+	if err != nil {
+		// A lookup failure is a server problem, not a sales message. Telling a
+		// paying customer to upgrade because the database hiccuped sends them to
+		// support for the wrong reason — and the old shared branch also read
+		// ents.PlanID off a zero struct, reporting plan_id "".
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"})
+		return
+	}
+	if license.Enforcing() && !ents.AllowExportLogs {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "Exporting detailed logs requires Pro plan",
 			"feature": "allow_export_logs",
@@ -90,10 +98,10 @@ func ExportRoomLogs(c *gin.Context) {
 	players := getRoomPlayers(room.ID, room.Status)
 
 	c.JSON(http.StatusOK, gin.H{
-		"room":     room,
-		"players":  players,
-		"answers":  answers,
-		"format":   "json",
-		"plan_id":  ents.PlanID,
+		"room":    room,
+		"players": players,
+		"answers": answers,
+		"format":  "json",
+		"plan_id": ents.PlanID,
 	})
 }

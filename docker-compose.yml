@@ -4,12 +4,10 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: quizzzone-postgres
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_DB: quizzzone
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -23,15 +21,15 @@ services:
   redis:
     image: redis:7-alpine
     container_name: quizzzone-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --save 60 1 --loglevel warning
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     networks:
       - quizzzone-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -39,11 +37,13 @@ services:
   centrifugo:
     image: centrifugo/centrifugo:v5
     container_name: quizzzone-centrifugo
-    ports:
-      - "8000:8000"
     volumes:
       - ./centrifugo.json:/centrifugo/config.json
     command: centrifugo -c config.json
+    environment:
+      CENTRIFUGO_TOKEN_HMAC_SECRET_KEY: ${CENTRIFUGO_SECRET:?CENTRIFUGO_SECRET is required}
+      CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:?CENTRIFUGO_API_KEY is required}
+      CENTRIFUGO_REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     depends_on:
       redis:
         condition: service_healthy
@@ -53,31 +53,30 @@ services:
   backend:
     build: .
     container_name: quizzzone-backend
-    ports:
-      - "8082:8082"
     environment:
       APP_ENV: ${APP_ENV:-development}
       PORT: ${PORT:-8082}
-      JWT_SECRET: ${JWT_SECRET:-change_me_to_a_long_random_string}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_USER: postgres
-      DB_PASSWORD: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       DB_NAME: quizzzone
       DB_SSLMODE: disable
       REDIS_ADDR: redis:6379
-      REDIS_PASSWORD: ""
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       CENTRIFUGO_API_URL: http://centrifugo:8000/api
-      CENTRIFUGO_SECRET: ${CENTRIFUGO_SECRET:-change_me_centrifugo_hmac_secret}
-      CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:-change_me_centrifugo_api_key}
-      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@quizzzone.local}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-QuizzZoneAdmin!2026}
+      CENTRIFUGO_SECRET: ${CENTRIFUGO_SECRET:?CENTRIFUGO_SECRET is required}
+      CENTRIFUGO_API_KEY: ${CENTRIFUGO_API_KEY:?CENTRIFUGO_API_KEY is required}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+      SEED_ADMIN_RESET_PASSWORD: ${SEED_ADMIN_RESET_PASSWORD:-false}
       CORS_ORIGINS: http://localhost,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001
       GIN_MODE: ${GIN_MODE:-release}
       SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
       SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_EMAIL: ${SMTP_EMAIL:-buichthanh2468@gmail.com}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-tgjcjprewubkmgsg}
+      SMTP_EMAIL: ${SMTP_EMAIL:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy

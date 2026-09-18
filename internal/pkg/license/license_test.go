@@ -29,34 +29,44 @@ func TestThemeRequestsPlayerPaced(t *testing.T) {
 	}
 }
 
-func TestDefaultFreeEntitlements(t *testing.T) {
+// Free is the unlicensed tier: an account that has not been assigned a plan
+// must not be able to create anything. Every limit is zero, and zero is not
+// "unlimited" — IsUnlimited only treats negatives that way, so the handler
+// gates (count >= limit) block on the very first attempt.
+func TestDefaultFreeEntitlementsIsLocked(t *testing.T) {
 	e := defaultFreeEntitlements()
 	if e.PlanID != PlanFree {
 		t.Fatalf("plan=%s", e.PlanID)
 	}
-	if e.MaxPlayersPerRoom != 20 {
-		t.Fatalf("max players free=%d want 20", e.MaxPlayersPerRoom)
+	limits := map[string]int{
+		"max_players_per_room":   e.MaxPlayersPerRoom,
+		"max_quizzes":            e.MaxQuizzes,
+		"max_templates":          e.MaxTemplates,
+		"max_concurrent_rooms":   e.MaxConcurrentRooms,
+		"max_questions_per_quiz": e.MaxQuestionsPerQuiz,
 	}
-	if e.MaxQuestionsPerQuiz != 30 {
-		t.Fatalf("max questions free=%d want 30", e.MaxQuestionsPerQuiz)
+	for name, v := range limits {
+		if v != 0 {
+			t.Fatalf("unlicensed %s=%d want 0", name, v)
+		}
+		if IsUnlimited(v) {
+			t.Fatalf("unlicensed %s must not read as unlimited", name)
+		}
 	}
-	if e.MaxConcurrentRooms != 1 {
-		t.Fatalf("concurrent rooms free=%d want 1", e.MaxConcurrentRooms)
-	}
-	if e.AllowPlayerPaced {
-		t.Fatal("free must not allow player_paced")
+	if e.AllowPlayerPaced || e.AllowCustomBranding || e.AllowExportLogs {
+		t.Fatalf("unlicensed tier must have no Pro features: %+v", e)
 	}
 }
 
 func TestEntitlementsFromPlanPro(t *testing.T) {
 	// Mirror seeded Pro plan numbers without DB dependency.
 	type stub struct {
-		ID, Name                                     string
-		MaxPlayersPerRoom, MaxQuizzes, MaxTemplates  int
-		MaxConcurrentRooms, MaxQuestionsPerQuiz      int
-		AllowPlayerPaced, AllowCustomBranding        bool
-		AllowExportLogs, AllowPrioritySupport        bool
-		AllowRemoveWatermark                         bool
+		ID, Name                                    string
+		MaxPlayersPerRoom, MaxQuizzes, MaxTemplates int
+		MaxConcurrentRooms, MaxQuestionsPerQuiz     int
+		AllowPlayerPaced, AllowCustomBranding       bool
+		AllowExportLogs, AllowPrioritySupport       bool
+		AllowRemoveWatermark                        bool
 	}
 	// Use entitlementsFromPlan via model — exercised through defaultFree when nil.
 	if got := entitlementsFromPlan(nil); got.PlanID != PlanFree {
@@ -73,23 +83,27 @@ func TestPlanCapacityMatrix(t *testing.T) {
 		maxConcurrentRooms int
 	}
 	want := []planLimits{
-		{PlanFree, 20, 30, 1},
+		{PlanFree, 0, 0, 0},
 		{PlanPro, 200, 100, 10},
 	}
-	for _, p := range want {
-		if p.maxPlayers <= 0 {
-			t.Fatalf("%s max players must be > 0", p.id)
-		}
+	if want[0].maxPlayers != 0 || want[0].maxConcurrentRooms != 0 {
+		t.Fatalf("free tier must stay locked: %+v", want[0])
 	}
-	if want[1].maxPlayers/want[0].maxPlayers != 10 {
-		t.Fatalf("pro/free player ratio want 10")
+	if want[1].maxPlayers <= 0 || want[1].maxConcurrentRooms <= 0 {
+		t.Fatalf("pro tier must grant capacity: %+v", want[1])
 	}
 }
 
-func TestEnforcementDeferred(t *testing.T) {
-	if EnforcementEnabled {
-		t.Fatal("EnforcementEnabled must stay false until license productization; see LICENSE_DEFERRED.md")
+// Enforcing() reads config.AppConfig, which is nil in a unit test. That nil
+// case must mean "off": a config that failed to load must never lock every
+// host out of the product.
+func TestEnforcingDefaultsOffWithoutConfig(t *testing.T) {
+	if Enforcing() {
+		t.Fatal("Enforcing() must be false when config.AppConfig is nil")
 	}
+}
+
+func TestOpenEntitlementsUnlockEverything(t *testing.T) {
 	e := openEntitlements()
 	if !e.AllowPlayerPaced || !IsUnlimited(e.MaxQuizzes) || !IsUnlimited(e.MaxQuestionsPerQuiz) {
 		t.Fatalf("open entitlements must unlock Pro gates: %+v", e)
