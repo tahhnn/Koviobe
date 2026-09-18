@@ -2,6 +2,8 @@ package handler
 
 import (
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +14,8 @@ import (
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/audit"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
+	"github.com/quizzzone/backend/internal/pkg/secmon"
 )
 
 // redeemUserErrors are the redeem failures that describe what the buyer did
@@ -46,7 +50,7 @@ func RedeemLicenseCode(c *gin.Context) {
 		Code string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Thiếu mã kích hoạt"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Activation code is required"})
 		return
 	}
 
@@ -54,10 +58,11 @@ func RedeemLicenseCode(c *gin.Context) {
 	if err != nil {
 		if isRedeemUserError(err) {
 			audit.Record(uid, "license_redeem_failed", license.NormalizeCode(req.Code), c.ClientIP())
+			secmon.RedeemFailed(c.ClientIP(), uid)
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không kích hoạt được, thử lại sau"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not activate the code, please try again later"})
 		return
 	}
 
@@ -175,6 +180,78 @@ func AdminRevokeLicenseCode(c *gin.Context) {
 
 	audit.Record(adminID.(uint), "admin_revoke_license_code", code.Code, c.ClientIP())
 	c.JSON(http.StatusOK, code)
+}
+
+// AdminClawBackLicenseCode revokes a code AND takes the plan back from the users
+// it granted, ending any game they still have running.
+//
+// A separate endpoint rather than a flag on /revoke: that one's non-destructive
+// meaning is documented in the handler, in LICENSING.md and in the console's own
+// copy, and a URL whose destructiveness depends on a body field is a URL nobody
+// can reason about from the audit log. Claw-back includes the revoke.
+//
+// Users who moved on to a different grant are left alone — see
+// license.shouldClawBack for the rule. Every redeemer is reported either way.
+func AdminClawBackLicenseCode(c *gin.Context) {
+	adminID, _ := c.Get("user_id")
+
+	var req struct {
+		Note string `json:"note"`
+	}
+	_ = c.ShouldBindJSON(&req) // body is optional
+
+	code, results, err := license.ClawBackCode(c.Param("code"), license.GrantContext{
+		ActorUserID: adminID.(uint),
+		Note:        strings.TrimSpace(req.Note),
+		IPAddress:   c.ClientIP(),
+	})
+	if err != nil {
+		if errors.Is(err, license.ErrCodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "License code not found"})
+			return
+		}
+		log.Printf("[AdminClawBack] code %s failed: %v", c.Param("code"), err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to claw back the code"})
+		return
+	}
+
+	// Rooms are closed here, outside every transaction: publishing to Centrifugo
+	// and scheduling cleanup cannot sit inside a database transaction, and the
+	// license package must not import this one.
+	revoked, skipped, failed, closed := 0, 0, 0, 0
+	for _, r := range results {
+		switch r.Outcome {
+		case license.OutcomeRevoked:
+			revoked++
+		case license.OutcomeFailed:
+			failed++
+		default:
+			skipped++
+		}
+		for _, id := range r.RoomIDs {
+			if err := FinalizeRoomWithReason(id, EndReasonLicenseRevoked); err != nil {
+				log.Printf("[AdminClawBack] could not close room %d: %v", id, err)
+				notify.P1("clawback_close_room",
+					"Không đóng được phòng %d khi thu hồi mã %s: %v", id, code.Code, err)
+				continue
+			}
+			closed++
+		}
+	}
+
+	audit.Record(adminID.(uint), "admin_clawback_license_code",
+		fmt.Sprintf("%s_users%d_rooms%d", code.Code, revoked, closed), c.ClientIP())
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":         code.Code,
+		"revoked_at":   code.RevokedAt,
+		"total":        len(results),
+		"revoked":      revoked,
+		"skipped":      skipped,
+		"failed":       failed,
+		"rooms_closed": closed,
+		"results":      results,
+	})
 }
 
 // AdminListRedemptions shows who redeemed what, newest first.

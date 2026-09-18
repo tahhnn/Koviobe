@@ -6,6 +6,7 @@ import (
 
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 // ExpiredGrant describes one subscription the sweep downgraded.
@@ -61,6 +62,7 @@ func SweepExpiredSubscriptions() ([]ExpiredGrant, error) {
 		// DowngradeToFree writes the history row for us (source expiry_auto).
 		if err := DowngradeToFree(sub.UserID); err != nil {
 			log.Printf("[LICENSE] downgrade failed for user %d, leaving rooms open: %v", sub.UserID, err)
+			notify.P1("license_downgrade_failed", "Hạ gói thất bại cho user %d, phòng vẫn mở: %v", sub.UserID, err)
 			continue
 		}
 

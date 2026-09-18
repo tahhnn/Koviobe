@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -22,6 +23,8 @@ func InitRedis() {
 	// Test connection
 	_, err := RDB.Ping(ctx).Result()
 	if err != nil {
+		notify.Fatal("redis_connect", "Không kết nối được Redis (%s): %v — container sẽ exit(1) và restart loop.",
+			cfg.RedisAddr, err)
 		log.Fatalf("Failed to connect to Redis: %v", err)
 	}
 

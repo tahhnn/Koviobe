@@ -21,6 +21,8 @@ import (
 	"github.com/quizzzone/backend/internal/pkg/email"
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
+	"github.com/quizzzone/backend/internal/pkg/secmon"
 	"github.com/quizzzone/backend/internal/realtime"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -57,16 +59,23 @@ func Login(c *gin.Context) {
 
 	var user model.User
 	if err := db.DB.Preload("Role.Permissions").Where("email = ?", req.Email).First(&user).Error; err != nil {
+		// userID 0: the account does not exist. Recording it anyway is the
+		// point — enumeration shows up as a burst of these.
+		audit.Record(0, "login_failed_no_user", req.Email, c.ClientIP())
+		secmon.LoginFailed(c.ClientIP(), req.Email)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		audit.Record(user.ID, "login_failed_bad_password", req.Email, c.ClientIP())
+		secmon.LoginFailed(c.ClientIP(), req.Email)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 		return
 	}
 
 	if !user.IsActive {
+		audit.Record(user.ID, "login_failed_inactive", req.Email, c.ClientIP())
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Account is deactivated"})
 		return
 	}
@@ -395,6 +404,7 @@ func ChangePassword(c *gin.Context) {
 	// the password change itself succeeded and must not be reported as failed.
 	if err := jwt.RevokeAllRefreshTokens(user.ID); err != nil {
 		log.Printf("[ChangePassword] failed to revoke refresh tokens for user %d: %v", user.ID, err)
+		notify.P1("revoke_tokens_failed", "Đổi mật khẩu nhưng không thu hồi được refresh token (user=%d): %v — phiên cũ vẫn dùng được.", user.ID, err)
 	}
 
 	// Record Audit Log

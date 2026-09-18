@@ -12,6 +12,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/quizzzone/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -53,6 +55,7 @@ func RateLimitKey(prefix, identity string, maxAttempts int64, window time.Durati
 		res, err := incrWithTTL.Run(ctx, cache.RDB, []string{key}, int64(window.Seconds())).Result()
 		if err != nil {
 			log.Printf("[RateLimit] Redis error on %s: %v", prefix, err)
+			notify.P1("ratelimit_redis_error", "Redis lỗi ở limiter %q: %v — limiter đang fail-%s.", prefix, err, failMode(failClosed))
 			if failClosed {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
 				c.Abort()
@@ -65,6 +68,7 @@ func RateLimitKey(prefix, identity string, maxAttempts int64, window time.Durati
 		count, ok := res.(int64)
 		if !ok {
 			log.Printf("[RateLimit] unexpected Redis reply type %T on %s", res, prefix)
+			notify.P1("ratelimit_bad_reply", "Redis trả kiểu %T bất thường ở limiter %q — limiter đang fail-%s.", res, prefix, failMode(failClosed))
 			if failClosed {
 				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
 				c.Abort()
@@ -87,9 +91,31 @@ func RateLimitKey(prefix, identity string, maxAttempts int64, window time.Durati
 	}
 }
 
-// JoinRoomRateLimit: 10 join attempts per IP per minute (fail open if Redis down).
+// JoinRoomRateLimit: JOIN_RATE_LIMIT_PER_MIN join attempts per IP per minute
+// (fail open if Redis down).
+//
+// Keyed on the client IP because a joining player has no token yet — there is
+// nothing else to key on. That makes the ceiling a venue question, not a
+// security one: a hall, a school or an office puts every player behind one NAT
+// address, so the limit has to clear the biggest room the deployment sells.
+// The old constant of 10/min meant exactly ten people could join from any one
+// public IP per minute, which capped a 1000-seat event at ten players.
 func JoinRoomRateLimit() gin.HandlerFunc {
-	return RateLimit("join", 10, time.Minute, false)
+	return RateLimit("join", int64(capacityLimit(func() int {
+		return config.AppConfig.JoinRateLimitPerMin
+	}, 2000)), time.Minute, false)
+}
+
+// capacityLimit reads a configured ceiling, falling back when config has not
+// been loaded (unit tests construct middleware without LoadConfig).
+func capacityLimit(read func() int, fallback int) int {
+	if config.AppConfig == nil {
+		return fallback
+	}
+	if v := read(); v > 0 {
+		return v
+	}
+	return fallback
 }
 
 // AuthRateLimit: 20 auth attempts per IP per minute (fail closed).
@@ -137,9 +163,13 @@ func RedeemRateLimit() gin.HandlerFunc {
 	}
 }
 
-// PinLookupRateLimit: 30 PIN lookups per IP per minute.
+// PinLookupRateLimit: PIN_LOOKUP_RATE_LIMIT_PER_MIN PIN lookups per IP per
+// minute. Same NAT reasoning as JoinRoomRateLimit — every player in a room
+// looks the PIN up at least once, from the shared venue address.
 func PinLookupRateLimit() gin.HandlerFunc {
-	return RateLimit("pin", 30, time.Minute, false)
+	return RateLimit("pin", int64(capacityLimit(func() int {
+		return config.AppConfig.PinLookupRateLimitPerMin
+	}, 2000)), time.Minute, false)
 }
 
 // SubmitAnswerRateLimit: 60 submissions per player per minute.
@@ -168,6 +198,7 @@ func SubmitAnswerRateLimit() gin.HandlerFunc {
 		if err != nil {
 			// Fail open: Redis being down must not stop a live game.
 			log.Printf("[RateLimit] Redis error on answer limiter: %v", err)
+			notify.P1("ratelimit_answer_redis", "Redis lỗi ở limiter submit-answer: %v", err)
 			c.Next()
 			return
 		}
@@ -183,4 +214,15 @@ func SubmitAnswerRateLimit() gin.HandlerFunc {
 		})
 		c.Abort()
 	}
+}
+
+// failMode names the limiter's behaviour when Redis is unavailable. It goes in
+// the alert text because the two cases need opposite responses: fail-open means
+// the endpoint is unprotected right now, fail-closed means it is refusing real
+// users.
+func failMode(failClosed bool) string {
+	if failClosed {
+		return "closed (chặn hết, người dùng thật cũng bị từ chối)"
+	}
+	return "open (bỏ qua giới hạn, endpoint đang không được bảo vệ)"
 }

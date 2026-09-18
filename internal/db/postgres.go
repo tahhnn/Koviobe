@@ -9,6 +9,7 @@ import (
 
 	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -39,6 +40,8 @@ func InitPostgres() {
 		Logger: logger.Default.LogMode(logMode),
 	})
 	if err != nil {
+		notify.Fatal("db_connect", "Không kết nối được PostgreSQL (%s:%s/%s): %v — container sẽ exit(1) và restart loop.",
+			cfg.DBHost, cfg.DBPort, cfg.DBName, err)
 		log.Fatalf("Failed to connect to PostgreSQL: %v", err)
 	}
 
@@ -47,6 +50,7 @@ func InitPostgres() {
 	// churns through reconnects at the same time.
 	sqlDB, err := DB.DB()
 	if err != nil {
+		notify.Fatal("db_pool", "Không lấy được sql.DB để cấu hình pool: %v — container sẽ exit(1).", err)
 		log.Fatalf("Failed to access underlying sql.DB: %v", err)
 	}
 	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
@@ -81,8 +85,10 @@ func AutoMigrate() {
 		&model.LicenseCode{},
 		&model.LicenseRedemption{},
 		&model.SubscriptionEvent{},
+		&model.SystemSetting{},
 	)
 	if err != nil {
+		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)
 		log.Fatalf("Auto migration failed: %v", err)
 	}
 
@@ -319,9 +325,9 @@ func seedPricingPlans() {
 		{
 			ID:                   "pro",
 			Name:                 "Pro",
-			Description:          "Dành cho sự kiện / doanh nghiệp. Tới 200 người/phòng, không watermark, player-paced, export logs.",
+			Description:          "Dành cho sự kiện / doanh nghiệp. Tới 2000 người/phòng, không watermark, player-paced, export logs.",
 			PriceMonthlyVND:      199000,
-			MaxPlayersPerRoom:    200,
+			MaxPlayersPerRoom:    2000,
 			MaxQuizzes:           -1, // unlimited
 			MaxTemplates:         -1,
 			MaxConcurrentRooms:   10,

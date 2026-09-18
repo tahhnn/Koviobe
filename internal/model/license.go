@@ -16,7 +16,11 @@ type PricingPlan struct {
 	MaxQuizzes          int    `gorm:"not null" json:"max_quizzes"`          // -1 = unlimited
 	MaxTemplates        int    `gorm:"not null" json:"max_templates"`        // -1 = unlimited
 	MaxConcurrentRooms  int    `gorm:"not null" json:"max_concurrent_rooms"` // waiting+active
-	MaxQuestionsPerQuiz int    `gorm:"not null;default:50" json:"max_questions_per_quiz"`
+	// Carries NO `default:` tag, for the same reason LicenseCode.DurationDays
+	// does not: GORM omits a zero-valued field from the INSERT when the column
+	// declares a default, so `default:50` silently turned the free plan's
+	// deliberate 0 ("unlicensed, create nothing") into 50 questions per quiz.
+	MaxQuestionsPerQuiz int `gorm:"not null" json:"max_questions_per_quiz"`
 	// Feature flags (Pro benefits)
 	AllowPlayerPaced     bool           `gorm:"default:false" json:"allow_player_paced"`
 	AllowCustomBranding  bool           `gorm:"default:false" json:"allow_custom_branding"`
@@ -38,6 +42,23 @@ type Subscription struct {
 	Status    string         `gorm:"size:50;default:'active'" json:"status"` // active, canceled, expired
 	StartsAt  time.Time      `json:"starts_at"`
 	EndsAt    *time.Time     `json:"ends_at,omitempty"` // nil = no expiry
+
+	// WarnedForEndsAt is the EndsAt the last pre-expiry warning was about, and
+	// WarnedThresholdDays is the threshold (7/3/1) it was sent at.
+	//
+	// Two columns rather than one because the marker has to reset when the term
+	// changes: a host who renews gets a new EndsAt, and a bare "already warned at
+	// 1" would suppress every warning for the new term. Storing the term the
+	// warning was about makes the reset free — a marker whose WarnedForEndsAt no
+	// longer matches the row is about a term that no longer exists, so there is
+	// no cleanup job to write.
+	//
+	// WarnedThresholdDays deliberately carries no `default:` tag: it is only
+	// meaningful when WarnedForEndsAt is set, so the nullable timestamp is the
+	// real presence flag and the int's zero value is never load-bearing.
+	WarnedForEndsAt     *time.Time `json:"-"`
+	WarnedThresholdDays int        `json:"-"`
+
 	Plan      *PricingPlan   `gorm:"foreignKey:PlanID" json:"plan,omitempty"`
 	User      *User          `gorm:"foreignKey:UserID" json:"-"`
 	CreatedAt time.Time      `json:"created_at"`

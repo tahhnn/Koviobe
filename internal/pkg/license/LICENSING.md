@@ -1,6 +1,18 @@
 # License / Pro gating
 
-**Status:** Enforced, mã kích hoạt, giao mã qua email, lịch sử đối soát, tự cắt khi hết hạn (2026-09-13). Trước đó deferred từ 2026-07.
+**Status:** Code đầy đủ (mã kích hoạt, giao mã qua email, lịch sử đối soát, tự cắt khi
+hết hạn), nhưng **cờ `LICENSE_ENFORCEMENT` đang TẮT trên prod** — mọi host vẫn nhận
+`openEntitlements()`, không gate nào chạy. Viết code 2026-09-13; chưa bật.
+
+Đừng đọc mục này là "đã enforce". Trạng thái thật luôn lấy từ `GET /api/license/me`
+(trường `enforcement`), không lấy từ tài liệu.
+
+Còn phải làm trước khi bật — xem "Quy trình bật enforcement" bên dưới:
+
+- [ ] `01_lock_free_plan.sql` (chưa chạy)
+- [ ] `02_grandfather_hosts.sql` (chưa chạy — **bỏ bước này là khoá luôn admin**)
+- [x] `03_fix_code_duration_default.sql`
+- [x] `04_fix_questions_per_quiz_default.sql`
 
 Thanh toán **không chạy trên app** — khách trả qua trung gian (chuyển khoản, đại lý), admin đúc mã hoặc gán gói sau khi tiền về. Hệ thống ghi lại số tiền + mã tham chiếu để đối soát với sao kê, không tự xác nhận thanh toán.
 
@@ -27,7 +39,7 @@ Gate so sánh `count >= limit`, nên `0 >= 0` chặn ngay từ lần tạo đầ
 
 | Limit / feature | free (chưa kích hoạt) | pro |
 |---|---|---|
-| Players / room | 0 | 200 |
+| Players / room | 0 | 2000 |
 | Questions / quiz | 0 | 100 |
 | Concurrent rooms | 0 | 10 |
 | Quizzes | 0 | ∞ (-1) |
@@ -72,6 +84,10 @@ psql -U postgres -d quizzzone -v ON_ERROR_STOP=1 -f scripts/license/01_lock_free
 psql -U postgres -d quizzzone -v ON_ERROR_STOP=1 -f scripts/license/02_grandfather_hosts.sql
 # rồi mới đặt LICENSE_ENFORCEMENT=true và restart
 ```
+
+Kiểm lại trước khi bật: `subscription_events` phải có dòng cho từng host được
+grandfather, và không user đang hoạt động nào còn `plan_id = 'free'`. Nếu
+`select count(*) from subscription_events` vẫn là 0 thì bước 02 chưa chạy.
 
 `02_grandfather_hosts.sql` cấp pro vĩnh viễn cho mọi admin và mọi user đã có
 quiz/template/room. **Bỏ bước này là tự khoá luôn tài khoản admin** — admin cũng đi
@@ -149,6 +165,15 @@ thực thay vì một câu hardcode.
 `gorm:"not null;default:30"`, nên mã đúc với `duration_days = 0` (vĩnh viễn) bị lưu
 thành 30 và chỉ cấp gói 30 ngày. Đã bỏ tag `default` và drop default ở DB
 (`scripts/license/03_fix_code_duration_default.sql`). Đừng thêm lại.
+
+Cùng lỗi đó còn sót ở `PricingPlan.MaxQuestionsPerQuiz` (`default:50`) tới 2026-09-14:
+`seedPricingPlans()` khai free với `MaxQuestionsPerQuiz: 0`, GORM bỏ field khỏi INSERT,
+DB lấy default → free được 50 câu/quiz thay vì 0. Không lộ ra vì `max_quizzes = 0` chặn
+trước khi tới gate câu hỏi, nên mọi DB dựng mới đều sai âm thầm. Đã bỏ tag và drop
+default (`scripts/license/04_fix_questions_per_quiz_default.sql`).
+
+Quy tắc rút ra: trong `pricing_plans`, **0 là một giá trị có nghĩa** ("không được gì"),
+nên không cột limit nào trong bảng này được phép có `default` ở tầng DB.
 
 ## Giao mã qua email
 

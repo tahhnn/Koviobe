@@ -34,10 +34,47 @@ type Config struct {
 	SMTPPort             string
 	SMTPEmail            string
 	SMTPPassword         string
+	// "implicit" (SMTPS, TLS before the greeting), "starttls", or empty to pick
+	// by port: 465 is implicit, everything else STARTTLS.
+	SMTPTLS string
 	// LicenseEnforcement gates the Free/Pro limits in internal/pkg/license. It is
 	// config, not a build-time constant, so enabling or disabling commercial gates
 	// is a restart — not a rebuild and redeploy of the image.
 	LicenseEnforcement bool
+
+	// Capacity knobs for large rooms. All three are per-minute or per-room
+	// ceilings that used to be constants; they are config because the limit that
+	// matters in practice is set by the venue, not by the build. A hall of 1000
+	// players behind one NAT address looks to every per-IP limiter like a single
+	// abusive client, so these have to be raised together with the room cap or
+	// the room simply cannot fill.
+	JoinRateLimitPerMin      int
+	PinLookupRateLimitPerMin int
+	// MaxPlayersPerRoomOpen is the room cap reported (and, once
+	// LICENSE_ENFORCEMENT is on, enforced) while license enforcement is off.
+	MaxPlayersPerRoomOpen int
+
+	// Telegram operational alerts (internal/pkg/notify). Leaving the token or
+	// chat ID empty disables the notifier entirely rather than failing startup,
+	// so dev and CI need no credentials.
+	TelegramBotToken string
+	TelegramChatID   string
+	// TelegramThreadID targets a topic inside a forum-style group; empty for a
+	// plain chat.
+	TelegramThreadID string
+	// TelegramFlushSeconds is the coalescing window: identical alerts inside it
+	// collapse into one message with a count.
+	TelegramFlushSeconds int
+	// TelegramMaxPerMinute caps outbound messages. Telegram throttles a bot at
+	// roughly 20/minute to one group, so the default leaves headroom.
+	TelegramMaxPerMinute int
+	// TelegramDigestHour is the local hour (0-23) for the daily summary;
+	// negative disables it.
+	TelegramDigestHour int
+	// TelegramAdminIDs optionally restricts who may run the read-only bot
+	// commands, as a comma-separated list of Telegram numeric user IDs. Empty
+	// means anyone in TELEGRAM_CHAT_ID — which is already a closed group.
+	TelegramAdminIDs string
 }
 
 var AppConfig *Config
@@ -85,7 +122,20 @@ func LoadConfig() {
 		SMTPPort:             getEnv("SMTP_PORT", "587"),
 		SMTPEmail:            getEnv("SMTP_EMAIL", ""),
 		SMTPPassword:         getEnv("SMTP_PASSWORD", ""),
+		SMTPTLS:              getEnv("SMTP_TLS", ""),
 		LicenseEnforcement:   getEnvBool("LICENSE_ENFORCEMENT", false),
+
+		JoinRateLimitPerMin:      getEnvInt("JOIN_RATE_LIMIT_PER_MIN", 2000),
+		PinLookupRateLimitPerMin: getEnvInt("PIN_LOOKUP_RATE_LIMIT_PER_MIN", 2000),
+		MaxPlayersPerRoomOpen:    getEnvInt("MAX_PLAYERS_PER_ROOM_OPEN", 2000),
+
+		TelegramBotToken:     getEnv("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID:       getEnv("TELEGRAM_CHAT_ID", ""),
+		TelegramThreadID:     getEnv("TELEGRAM_THREAD_ID", ""),
+		TelegramFlushSeconds: getEnvInt("TELEGRAM_FLUSH_SECONDS", 10),
+		TelegramMaxPerMinute: getEnvInt("TELEGRAM_MAX_PER_MINUTE", 15),
+		TelegramDigestHour:   getEnvInt("TELEGRAM_DIGEST_HOUR", 8),
+		TelegramAdminIDs:     getEnv("TELEGRAM_ADMIN_IDS", ""),
 	}
 
 	validateSecurityConfig(AppConfig)

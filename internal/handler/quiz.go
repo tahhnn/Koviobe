@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/quizzzone/backend/internal/pkg/audit"
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 	"github.com/quizzzone/backend/internal/realtime"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -41,6 +43,12 @@ type QuestionReq struct {
 	Duration      int         `json:"duration" binding:"min=5,max=120"`
 	Points        int         `json:"points" binding:"min=0,max=2000"`
 	Order         int         `json:"order"`
+	// Explanation is a pointer on purpose: nil means "leave whatever is in the
+	// DB alone". Every editor mutation in the frontend is a read-modify-write
+	// of the whole quiz (26 separate payload builders in app/actions/quizzes.ts),
+	// so a plain string would let any one of them that forgets the field wipe a
+	// host's slide as a side effect of renaming an option.
+	Explanation *string `json:"explanation"`
 }
 
 type JoinRoomReq struct {
@@ -154,6 +162,16 @@ func CreateQuiz(c *gin.Context) {
 			return
 		}
 
+		explanation := ""
+		if q.Explanation != nil {
+			explanation, err = validateExplanation(*q.Explanation)
+			if err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Question %d: %v", idx+1, err)})
+				return
+			}
+		}
+
 		question := model.Question{
 			QuizID:        quiz.ID,
 			Content:       q.Content,
@@ -163,6 +181,7 @@ func CreateQuiz(c *gin.Context) {
 			Duration:      q.Duration,
 			Points:        q.Points,
 			Order:         q.Order,
+			Explanation:   explanation,
 		}
 
 		if err := tx.Create(&question).Error; err != nil {
@@ -368,6 +387,7 @@ func CreateRoom(c *gin.Context) {
 		// this is reachable by exhaustion rather than by bad luck. Say so plainly
 		// instead of returning a generic failure.
 		log.Printf("[CreateRoom] PIN allocation failed after 20 attempts — PIN space may be exhausted")
+		notify.P0("pin_exhausted", "Cấp PIN thất bại sau 20 lần thử — không tạo được phòng mới.")
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Could not allocate a free room PIN. Please retry."})
 		return
 	}
@@ -505,7 +525,14 @@ func JoinRoom(c *gin.Context) {
 
 	ents, _ := license.GetEntitlements(room.HostID)
 	maxPlayers := ents.MaxPlayersPerRoom
-	if maxPlayers <= 0 {
+	if !license.Enforcing() && maxPlayers <= 0 {
+		// Enforcement off: openEntitlements always returns a positive cap, so a
+		// zero here means the lookup failed, not that the host is unlicensed —
+		// fall back rather than making the room unjoinable.
+		//
+		// With enforcement ON, zero IS the answer for an unactivated host, and
+		// the count >= limit gate below turns the first joiner away. Keeping the
+		// old unconditional floor would have let free grant 20 players.
 		maxPlayers = 20
 	}
 
@@ -529,10 +556,22 @@ func JoinRoom(c *gin.Context) {
 	// same count and all insert, so the cap could be overshot by the size of the
 	// burst — exactly the case a full room attracts.
 	roomFull := false
+	roomStarted := false
 	txErr := db.DB.Transaction(func(tx *gorm.DB) error {
 		var lockedRoom model.Room
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
 			return err
+		}
+
+		// The status read above this transaction is stale by the time the lock is
+		// held. Without re-checking it here a join could commit *after* StartGame
+		// had already stamped every player with their first question, leaving the
+		// new player in a running solo room with current_question_id NULL — which
+		// GetPlayerQuestion reports as NO_MORE_QUESTIONS, stranding them on the
+		// lobby screen. Measured at 29% of an 80-player burst before this check.
+		if lockedRoom.Status != "waiting" {
+			roomStarted = true
+			return fmt.Errorf("room_started")
 		}
 
 		var playerCount int64
@@ -547,6 +586,10 @@ func JoinRoom(c *gin.Context) {
 		return tx.Create(&player).Error
 	})
 
+	if roomStarted {
+		c.JSON(http.StatusConflict, gin.H{"error": "Joining is closed, the game already started"})
+		return
+	}
 	if roomFull {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":       fmt.Sprintf("Room is full (max %d players on host's %s plan)", maxPlayers, ents.PlanName),
@@ -585,6 +628,7 @@ func JoinRoom(c *gin.Context) {
 		"nickname":  player.Nickname,
 	}); err != nil {
 		log.Printf("[JoinRoom] realtime publish failed room=%d: %v", room.ID, err)
+		notify.P1("join_publish_failed", "Người chơi vào phòng nhưng push realtime thất bại (room=%d): %v — danh sách chờ của host không cập nhật.", room.ID, err)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -615,11 +659,6 @@ func StartGame(c *gin.Context) {
 		return
 	}
 
-	room.Status = "active"
-	room.CurrentQuestionIndex = -1
-	room.CurrentQuestionID = nil
-	db.DB.Save(&room)
-
 	// Parse ThemeConfig to check game mode
 	var themeCfg struct {
 		GameMode string `json:"game_mode"`
@@ -627,17 +666,56 @@ func StartGame(c *gin.Context) {
 	json.Unmarshal([]byte(room.ThemeConfig), &themeCfg)
 	isPlayerPaced := themeCfg.GameMode == "player_paced"
 
-	if isPlayerPaced {
-		// Assign first question but do NOT start the timer yet — timer starts when
-		// the player actually loads the question (avoids desync vs client clock).
-		var firstQuestion model.Question
-		err := db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").First(&firstQuestion).Error
-		if err == nil {
-			db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).UpdateColumns(map[string]interface{}{
-				"current_question_id":   firstQuestion.ID,
-				"question_active_until": nil,
-			})
+	// Flip the status and deal the first question under one row lock. Done
+	// separately, a join could slip between the two: JoinRoom takes this same
+	// lock, so serializing here means a concurrent join either commits first
+	// (and is dealt in by the UPDATE below) or finds the room already active
+	// and is turned away. Previously it could do neither and land in the room
+	// with no question — see the JoinRoom comment.
+	notWaiting := false
+	txErr := db.DB.Transaction(func(tx *gorm.DB) error {
+		var locked model.Room
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&locked, room.ID).Error; err != nil {
+			return err
 		}
+		if locked.Status != "waiting" {
+			notWaiting = true
+			return fmt.Errorf("not_waiting")
+		}
+
+		locked.Status = "active"
+		locked.CurrentQuestionIndex = -1
+		locked.CurrentQuestionID = nil
+		if err := tx.Save(&locked).Error; err != nil {
+			return err
+		}
+		room = locked
+
+		if isPlayerPaced {
+			// Assign first question but do NOT start the timer yet — timer starts
+			// when the player actually loads the question (avoids desync vs client
+			// clock).
+			var firstQuestion model.Question
+			if err := tx.Where("quiz_id = ?", locked.QuizID).
+				Order("questions.order ASC, questions.id ASC").First(&firstQuestion).Error; err == nil {
+				if err := tx.Model(&model.Player{}).Where("room_id = ?", locked.ID).
+					UpdateColumns(map[string]interface{}{
+						"current_question_id":   firstQuestion.ID,
+						"question_active_until": nil,
+					}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if notWaiting {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room can only be started from waiting status"})
+		return
+	}
+	if txErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start game"})
+		return
 	}
 
 	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "game:started", gin.H{
@@ -766,6 +844,108 @@ func validateCorrectAnswer(qType string, correctAnswer string, options interface
 
 // optionIDs extracts the option identifiers from a question's options payload,
 // which reaches the handler as free-form JSON.
+// maxExplanationBytes caps a single slide document. A slide holds a title, a
+// paragraph and an image URL — anything past this is not a slide, and the JSON
+// rides along on every quiz save and every realtime publish.
+const maxExplanationBytes = 64 * 1024
+
+var explanationLayouts = map[string]bool{
+	"text":        true,
+	"image_left":  true,
+	"image_right": true,
+	"image_top":   true,
+	"image_full":  true,
+}
+
+var hexColorRe = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// validateExplanation checks an explanation slide document. It returns the
+// canonical JSON to store, or "" when the host cleared the slide.
+//
+// Colors are rendered as inline style values on the client, so only #rrggbb is
+// accepted — a permissive string field there is a CSS injection sink. Image
+// URLs are likewise restricted to our own uploads and https.
+func validateExplanation(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", nil
+	}
+	if len(trimmed) > maxExplanationBytes {
+		return "", fmt.Errorf("explanation is too large (max %d KB)", maxExplanationBytes/1024)
+	}
+
+	var doc struct {
+		Version int     `json:"v"`
+		Layout  string  `json:"layout"`
+		Overlay float64 `json:"overlay"`
+		Bg      struct {
+			Color string `json:"color"`
+		} `json:"bg"`
+		Elements []struct {
+			ID    string `json:"id"`
+			Kind  string `json:"kind"`
+			Role  string `json:"role"`
+			Text  string `json:"text"`
+			URL   string `json:"url"`
+			Fit   string `json:"fit"`
+			Style struct {
+				Color string `json:"color"`
+				Size  string `json:"size"`
+				Align string `json:"align"`
+			} `json:"style"`
+		} `json:"elements"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &doc); err != nil {
+		return "", fmt.Errorf("invalid explanation format")
+	}
+	if !explanationLayouts[doc.Layout] {
+		return "", fmt.Errorf("unknown explanation layout %q", doc.Layout)
+	}
+	if doc.Overlay < 0 || doc.Overlay > 0.8 {
+		return "", fmt.Errorf("explanation overlay must be between 0 and 0.8")
+	}
+	if doc.Bg.Color != "" && !hexColorRe.MatchString(doc.Bg.Color) {
+		return "", fmt.Errorf("explanation background color must be #rrggbb")
+	}
+	if len(doc.Elements) > 16 {
+		return "", fmt.Errorf("explanation has too many elements")
+	}
+	for i, el := range doc.Elements {
+		switch el.Kind {
+		case "text":
+			if len(el.Text) > 4000 {
+				return "", fmt.Errorf("explanation element %d: text is too long", i+1)
+			}
+		case "image":
+			if !isAllowedMediaURL(el.URL) {
+				return "", fmt.Errorf("explanation element %d: image URL is not allowed", i+1)
+			}
+		default:
+			return "", fmt.Errorf("explanation element %d: unknown kind %q", i+1, el.Kind)
+		}
+		if el.Style.Color != "" && !hexColorRe.MatchString(el.Style.Color) {
+			return "", fmt.Errorf("explanation element %d: color must be #rrggbb", i+1)
+		}
+	}
+	return trimmed, nil
+}
+
+// isAllowedMediaURL accepts our own upload paths and plain https URLs (hosts
+// paste GIF links from the picker). Everything else — data:, javascript:,
+// protocol-relative — is refused.
+func isAllowedMediaURL(u string) bool {
+	if u == "" {
+		return false
+	}
+	if len(u) > 2048 {
+		return false
+	}
+	if strings.HasPrefix(u, "/uploads/") {
+		return !strings.Contains(u, "..")
+	}
+	return strings.HasPrefix(u, "https://")
+}
+
 func optionIDs(options interface{}) ([]string, error) {
 	raw, err := json.Marshal(options)
 	if err != nil {
@@ -940,6 +1120,25 @@ func SubmitAnswer(c *gin.Context) {
 		}
 
 		if isPlayerPaced {
+			// The status read before this transaction is not a guarantee: a submit
+			// that passed it can still commit after finalizeRoom claimed the room,
+			// landing a score on a player row that is about to be deleted and an
+			// answer log that no archive will ever mention. The classic branch
+			// below is already covered — it locks the room and finalizeRoom nulls
+			// current_question_id — but solo mode locks only the player, so it has
+			// to read the room's status under a lock of its own.
+			//
+			// SHARE, not UPDATE: every player in a solo room submits against this
+			// one row, and an exclusive lock would serialize a thousand of them
+			// behind each other. SHARE lets them proceed together while still
+			// blocking finalizeRoom's UPDATE until they have committed.
+			var lockedRoom model.Room
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+				return err
+			}
+			if lockedRoom.Status != "active" {
+				return fmt.Errorf("room_finished")
+			}
 			if lockedPlayer.CurrentQuestionID == nil || *lockedPlayer.CurrentQuestionID != req.QuestionID {
 				return fmt.Errorf("question_not_active")
 			}
@@ -1022,6 +1221,14 @@ func SubmitAnswer(c *gin.Context) {
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
 				return err
 			}
+			// finalizeRoom nulls current_question_id in the same update that flips
+			// the status, so the check below already catches an ended room. Say it
+			// outright anyway: the player gets ROOM_FINISHED and goes to the
+			// results screen, instead of "the question is not active" for a game
+			// that no longer exists.
+			if lockedRoom.Status != "active" {
+				return fmt.Errorf("room_finished")
+			}
 			if lockedRoom.CurrentQuestionID == nil || *lockedRoom.CurrentQuestionID != req.QuestionID {
 				return fmt.Errorf("question_not_active")
 			}
@@ -1077,6 +1284,10 @@ func SubmitAnswer(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Question is not currently active"})
 		case "time_exceeded":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Time limit exceeded for this question"})
+		case "room_finished":
+			// Same sentinel and status the question fetch uses for a closed room,
+			// so the client takes the path it already has: straight to results.
+			c.JSON(http.StatusGone, gin.H{"error": "ROOM_FINISHED"})
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to submit answer"})
 		}
@@ -1089,6 +1300,10 @@ func SubmitAnswer(c *gin.Context) {
 		"score":         finalScore,
 		"points_earned": pointsEarned,
 		"question_type": question.Type,
+		// Solo mode: the host scoreboard is the whole screen, so it applies this
+		// payload directly instead of waiting for its next poll. "finished" is the
+		// only way it can tell a player who stopped from one still thinking.
+		"finished": playerFinished,
 	}
 	if question.Type != "poll" {
 		answeredPayload["is_correct"] = isCorrect
@@ -1111,8 +1326,9 @@ func SubmitAnswer(c *gin.Context) {
 			Count(&unfinished)
 		if unfinished == 0 {
 			go func(roomID, hostID uint) {
-				if _, alreadyEnded, err := finalizeRoom(roomID); err != nil {
+				if _, alreadyEnded, err := finalizeRoom(roomID, EndReasonHost); err != nil {
 					log.Printf("[SubmitAnswer] solo auto-finish failed for room %d: %v", roomID, err)
+					notify.P1("solo_autofinish_failed", "Tự kết thúc phòng solo thất bại (room=%d): %v — người chơi kẹt ở câu cuối.", roomID, err)
 				} else if !alreadyEnded {
 					audit.Record(hostID, "auto_end_game", fmt.Sprintf("room_%d", roomID), "system")
 				}
@@ -1132,6 +1348,20 @@ func SubmitAnswer(c *gin.Context) {
 	if question.Type == "poll" {
 		resp["is_correct"] = false
 		resp["recorded"] = true
+	}
+	// Solo mode has no host to press "reveal", so a player used to learn only
+	// whether they were right, never what the right answer was. A slide is the
+	// host opting that question into a teaching moment: when one exists, the
+	// answer comes back with the submission (right or wrong) so the client can
+	// highlight it before showing the slide. Questions without a slide keep the
+	// old response shape exactly.
+	//
+	// Solo only. In host-paced mode everyone answers the same question at once,
+	// so handing the answer to whoever submits first would let them leak it to
+	// the room before the host reveals.
+	if isPlayerPaced && question.Explanation != "" && question.Type != "poll" {
+		resp["correct_answer"] = question.CorrectAnswer
+		resp["explanation"] = question.Explanation
 	}
 	c.JSON(http.StatusOK, resp)
 }
@@ -1225,6 +1455,10 @@ func EndQuestion(c *gin.Context) {
 		"question_id": question.ID,
 		"type":        question.Type,
 		"leaderboard": leaderboard,
+		// The host screen shows its "Explain" button only when there is
+		// something to show; the payload carries the flag, not the slide, so
+		// the document travels once on the explain step instead of on reveal.
+		"has_explanation": question.Explanation != "",
 	}
 	if question.Type != "poll" {
 		endedPayload["correct_answer"] = question.CorrectAnswer
@@ -1239,9 +1473,10 @@ func EndQuestion(c *gin.Context) {
 	db.DB.Save(&room)
 
 	resp := gin.H{
-		"message":     "Question ended",
-		"type":        question.Type,
-		"leaderboard": leaderboard,
+		"message":         "Question ended",
+		"type":            question.Type,
+		"leaderboard":     leaderboard,
+		"has_explanation": question.Explanation != "",
 	}
 	if question.Type != "poll" {
 		resp["correct_answer"] = question.CorrectAnswer
@@ -1250,6 +1485,247 @@ func EndQuestion(c *gin.Context) {
 		resp["total_votes"] = endedPayload["total_votes"]
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+// ExplainQuestion pushes the current question's explanation slide to every
+// screen in the room. Host-paced only: it sits between the reveal step and the
+// next question, and the host decides how long it stays up.
+//
+// The slide is published here rather than inside question:ended so that a
+// question without a slide costs nothing, and so the host can hold the answer
+// screen for as long as they want before moving on.
+func ExplainQuestion(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	roomIDStr := c.Param("id")
+	roomID, _ := strconv.ParseUint(roomIDStr, 10, 32)
+
+	var room model.Room
+	if err := db.DB.Where("id = ? AND host_id = ?", uint(roomID), userID.(uint)).First(&room).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		return
+	}
+	if room.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		return
+	}
+	if roomGameMode(room.ThemeConfig) == "player_paced" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Host question controls are not available in solo mode"})
+		return
+	}
+	if room.CurrentQuestionID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No active question"})
+		return
+	}
+
+	var question model.Question
+	if err := db.DB.First(&question, *room.CurrentQuestionID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
+		return
+	}
+	if question.Explanation == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Question has no explanation slide"})
+		return
+	}
+
+	payload := gin.H{
+		"question_id": question.ID,
+		"explanation": question.Explanation,
+	}
+	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:explain", payload)
+
+	c.JSON(http.StatusOK, payload)
+}
+
+// leaderboardTopN is how long the between-questions leaderboard slide is. Five
+// is what question:ended already broadcasts, and as many rows as a phone sheet
+// shows without scrolling.
+const leaderboardTopN = 5
+
+// StandingRow is one line of that slide.
+type StandingRow struct {
+	ID       uint   `json:"id"`
+	Nickname string `json:"nickname"`
+	Score    int    `json:"score"`
+	Rank     int    `json:"rank"`
+}
+
+// roomStandings reads the top rows of a room plus the caller's own row.
+//
+// The caller's row is returned separately rather than left for the client to
+// pick out of the list: most players are not in the top five, and "47th, 820
+// points" is the only line of the slide that is about them.
+//
+// Ordering is score DESC, id ASC everywhere, the rank arithmetic included, so
+// two players on the same score are never both shown as third.
+func roomStandings(room *model.Room, callerNickname string) ([]StandingRow, *StandingRow, int) {
+	if room.Status == "finished" {
+		players := getRoomPlayers(room.ID, room.Status)
+		sort.SliceStable(players, func(i, j int) bool {
+			if players[i].Score != players[j].Score {
+				return players[i].Score > players[j].Score
+			}
+			return players[i].ID < players[j].ID
+		})
+		top := make([]StandingRow, 0, leaderboardTopN)
+		var me *StandingRow
+		for i, p := range players {
+			row := StandingRow{ID: p.ID, Nickname: p.Nickname, Score: p.Score, Rank: i + 1}
+			if i < leaderboardTopN {
+				top = append(top, row)
+			}
+			if me == nil && callerNickname != "" && p.Nickname == callerNickname {
+				self := row
+				me = &self
+			}
+		}
+		return top, me, len(players)
+	}
+
+	top := make([]StandingRow, 0, leaderboardTopN)
+	db.DB.Model(&model.Player{}).
+		Select("id, nickname, score").
+		Where("room_id = ?", room.ID).
+		Order("score DESC, id ASC").
+		Limit(leaderboardTopN).
+		Scan(&top)
+	for i := range top {
+		top[i].Rank = i + 1
+	}
+
+	var total int64
+	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&total)
+
+	var me *StandingRow
+	if callerNickname != "" {
+		var self model.Player
+		if err := db.DB.Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
+			// A COUNT of the players ahead, not a scan of the roster: every
+			// player in the room asks for this after every question, so the cost
+			// has to stay flat as the room grows.
+			var ahead int64
+			db.DB.Model(&model.Player{}).
+				Where("room_id = ? AND (score > ? OR (score = ? AND id < ?))", room.ID, self.Score, self.Score, self.ID).
+				Count(&ahead)
+			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score, Rank: int(ahead) + 1}
+		}
+	}
+	return top, me, int(total)
+}
+
+// roomViewerAuth identifies the caller of a read-only room endpoint: a player
+// holding an X-Player-Token bound to the room, or the host holding a Bearer
+// JWT. It writes the failure response itself and reports ok=false.
+//
+// The player token is preferred for the same reason GetRoom prefers it: a host
+// often has a play tab open in the same browser.
+func roomViewerAuth(c *gin.Context, roomID uint) (nickname string, hostID uint, ok bool) {
+	playerTokenStr := c.GetHeader("X-Player-Token")
+	authHeader := c.GetHeader("Authorization")
+
+	switch {
+	case playerTokenStr != "":
+		pClaims, err := jwt.VerifyPlayerToken(playerTokenStr)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired player token"})
+			return "", 0, false
+		}
+		if pClaims.RoomID != roomID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
+			return "", 0, false
+		}
+		return pClaims.Nickname, 0, true
+	case authHeader != "":
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid Authorization header"})
+			return "", 0, false
+		}
+		hostClaims, err := jwt.VerifyToken(parts[1])
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return "", 0, false
+		}
+		return "", hostClaims.UserID, true
+	default:
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required: provide Authorization or X-Player-Token header"})
+		return "", 0, false
+	}
+}
+
+// GetRoomStandings serves the leaderboard slide that follows a question: the
+// top rows, the caller's own rank, and how many players are in the room.
+//
+// Deliberately not GetRoomResults, which returns the whole roster. That is read
+// once, at the end of a game; this is read by every player after every
+// question, so it stays O(top N) however large the room is.
+func GetRoomStandings(c *gin.Context) {
+	roomID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid room ID"})
+		return
+	}
+
+	// Authenticate before touching the DB, so walking room ids cannot tell
+	// "Room not found" from "Unauthorized".
+	callerNickname, hostID, ok := roomViewerAuth(c, uint(roomID))
+	if !ok {
+		return
+	}
+
+	var room model.Room
+	if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		return
+	}
+	if hostID != 0 && room.HostID != hostID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
+		return
+	}
+
+	top, me, total := roomStandings(&room, callerNickname)
+	resp := gin.H{
+		"room_id": room.ID,
+		"top":     top,
+		"total":   total,
+	}
+	if me != nil {
+		resp["me"] = me
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// ShowLeaderboard pushes the leaderboard slide onto every screen in the room.
+// Host-paced only, and the last beat of a question: the answer is revealed, the
+// explanation slide follows if the question has one, then the scoreboard.
+//
+// The push carries no scores. Each screen reads its own standings, because the
+// line that matters to a player is their own rank — broadcasting 2000 rows to
+// 2000 clients so each can find one of them is not a payload, it is a flood.
+func ShowLeaderboard(c *gin.Context) {
+	userID, _ := c.Get("user_id")
+	roomID, _ := strconv.ParseUint(c.Param("id"), 10, 32)
+
+	var room model.Room
+	if err := db.DB.Where("id = ? AND host_id = ?", uint(roomID), userID.(uint)).First(&room).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		return
+	}
+	if room.Status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		return
+	}
+	if roomGameMode(room.ThemeConfig) == "player_paced" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Host question controls are not available in solo mode"})
+		return
+	}
+
+	payload := gin.H{}
+	if room.CurrentQuestionID != nil {
+		payload["question_id"] = *room.CurrentQuestionID
+	}
+	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:leaderboard", payload)
+
+	c.JSON(http.StatusOK, payload)
 }
 
 // EndGame finishes the room session
@@ -1264,7 +1740,7 @@ func EndGame(c *gin.Context) {
 		return
 	}
 
-	rankings, alreadyEnded, endErr := finalizeRoom(room.ID)
+	rankings, alreadyEnded, endErr := finalizeRoom(room.ID, EndReasonHost)
 	if endErr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to end game"})
 		return
@@ -1273,9 +1749,12 @@ func EndGame(c *gin.Context) {
 		// 200 because ending an already-ended game is not a client error and the
 		// desired end state holds. But a bare 200 is indistinguishable from having
 		// done the work, so say so in a machine-readable field: a client must not
-		// have to substring-match prose to learn that no results were rebroadcast.
+		// have to substring-match prose to learn the room was closed by someone
+		// else. The rankings are the archived ones, and finalizeRoom has just
+		// replayed game:ended for anyone who missed it.
 		c.JSON(http.StatusOK, gin.H{
 			"message":       "Game already ended",
+			"rankings":      rankings,
 			"already_ended": true,
 		})
 		return
@@ -1311,11 +1790,27 @@ type finalRanking struct {
 // own End Game closes it: archived, players notified over game:ended, cleanup
 // scheduled. Reimplementing any of that in the cron would let the two paths drift.
 func FinalizeRoom(roomID uint) error {
-	_, _, err := finalizeRoom(roomID)
+	return FinalizeRoomWithReason(roomID, EndReasonHost)
+}
+
+// Why a room closed. Protocol values, never prose: the client branches on them,
+// so they are deliberately absent from the i18n catalog — same discipline as the
+// NO_MORE_QUESTIONS / ROOM_FINISHED sentinels.
+const (
+	EndReasonHost           = "" // the host pressed End Game, or solo mode finished
+	EndReasonLicenseExpired = "license_expired"
+	EndReasonLicenseRevoked = "license_revoked"
+)
+
+// FinalizeRoomWithReason is FinalizeRoom plus the cause, stored on the room and
+// pushed to players. A player who is bounced out of a game mid-question deserves
+// to know it was not their connection.
+func FinalizeRoomWithReason(roomID uint, reason string) error {
+	_, _, err := finalizeRoom(roomID, reason)
 	return err
 }
 
-func finalizeRoom(roomID uint) (rankings []finalRanking, alreadyEnded bool, err error) {
+func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyEnded bool, err error) {
 	var room model.Room
 	if err := db.DB.First(&room, roomID).Error; err != nil {
 		return nil, false, err
@@ -1326,12 +1821,37 @@ func finalizeRoom(roomID uint) (rankings []finalRanking, alreadyEnded bool, err 
 		Updates(map[string]interface{}{
 			"status":              "finished",
 			"current_question_id": nil,
+			// Written in the same claim as the status, so the stored reason is
+			// atomic with the transition and costs no extra query.
+			"ended_reason": reason,
 		})
 	if claim.Error != nil {
 		return nil, false, claim.Error
 	}
 	if claim.RowsAffected == 0 {
-		return nil, true, nil
+		// Already finished. The only reason anyone asks a second time is that a
+		// client never acted on the first game:ended — a host tab that missed the
+		// push, or the license sweep racing the host's own click — so replay it
+		// rather than returning a silent 200 that leaves those players sitting in
+		// a game that is already archived.
+		//
+		// Read the archive, never the live rows: the first caller's cleanup has
+		// very likely deleted them, and publishing rankings: [] would wipe the
+		// podium off every screen already showing it. No archive yet means the
+		// first caller is still between the claim and the insert; it publishes on
+		// its own a moment later, so staying quiet here is correct.
+		archived := archivedRankings(room.ID)
+		if len(archived) > 0 {
+			realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "game:ended", gin.H{
+				"room_id":  room.ID,
+				"rankings": archived,
+				// The STORED reason, not this caller's argument: a host clicking
+				// End Game on a room the licence sweep already closed must not
+				// replay it as an ordinary ending.
+				"reason": room.EndedReason,
+			})
+		}
+		return archived, true, nil
 	}
 
 	// Collect final rankings BEFORE cleanup
@@ -1356,12 +1876,14 @@ func finalizeRoom(roomID uint) (rankings []finalRanking, alreadyEnded bool, err 
 	archiveErr := archiveGameLogs(room, rankings)
 	if archiveErr != nil {
 		log.Printf("[finalizeRoom] archive failed for room %d, keeping players and answer logs: %v", room.ID, archiveErr)
+		notify.P1("finalize_archive_failed", "Archive khi kết thúc phòng thất bại (room=%d): %v — kết quả trận đấu có nguy cơ mất.", room.ID, archiveErr)
 	}
 
 	// Broadcast result to all connected clients
 	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "game:ended", gin.H{
 		"room_id":  room.ID,
 		"rankings": rankings,
+		"reason":   reason,
 	})
 
 	// Cleanup: delete transient player records and answer logs for this room —
@@ -1388,6 +1910,23 @@ func finalizeRoom(roomID uint) (rankings []finalRanking, alreadyEnded bool, err 
 // It returns an error so the caller can refuse to delete the source rows: the
 // archive is the only surviving copy of a finished game, and deleting players
 // and answer logs after a failed archive loses the game permanently.
+// archivedRankings replays what finalizeRoom wrote to game_sessions. Returns
+// nil when the room has no archive yet or its JSON cannot be read — callers
+// must treat that as "unknown", never as "nobody scored".
+func archivedRankings(roomID uint) []finalRanking {
+	var session model.GameSession
+	if err := db.DB.Where("room_id = ?", roomID).First(&session).Error; err != nil {
+		return nil
+	}
+	var rankings []finalRanking
+	if err := json.Unmarshal([]byte(session.Rankings), &rankings); err != nil {
+		log.Printf("[archivedRankings] room %d has unreadable archive: %v", roomID, err)
+		notify.P1("archive_unreadable", "Bản archive của phòng %d không đọc được: %v — kết quả trận đấu đã hỏng.", roomID, err)
+		return nil
+	}
+	return rankings
+}
+
 func archiveGameLogs(room model.Room, rankings interface{}) error {
 	rankingsJSON, err := json.Marshal(rankings)
 	if err != nil {
@@ -1494,6 +2033,21 @@ func UpdateQuiz(c *gin.Context) {
 			return
 		}
 
+		// nil means the caller did not touch the slide. Almost every editor
+		// action rebuilds the whole quiz payload from scratch, so treating an
+		// absent field as "clear it" would make renaming an option delete the
+		// question's slide.
+		var explanation *string
+		if q.Explanation != nil {
+			cleaned, err := validateExplanation(*q.Explanation)
+			if err != nil {
+				tx.Rollback()
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Question %d: %v", idx+1, err)})
+				return
+			}
+			explanation = &cleaned
+		}
+
 		if q.ID > 0 && existingMap[q.ID] != nil {
 			// Update existing question
 			question := existingMap[q.ID]
@@ -1504,6 +2058,9 @@ func UpdateQuiz(c *gin.Context) {
 			question.Duration = q.Duration
 			question.Points = q.Points
 			question.Order = q.Order
+			if explanation != nil {
+				question.Explanation = *explanation
+			}
 
 			if err := tx.Save(question).Error; err != nil {
 				tx.Rollback()
@@ -1522,6 +2079,9 @@ func UpdateQuiz(c *gin.Context) {
 				Duration:      q.Duration,
 				Points:        q.Points,
 				Order:         q.Order,
+			}
+			if explanation != nil {
+				question.Explanation = *explanation
 			}
 
 			if err := tx.Create(&question).Error; err != nil {
@@ -1640,6 +2200,9 @@ func GetRoom(c *gin.Context) {
 		json.Unmarshal([]byte(room.ThemeConfig), &config)
 		isPlayerPaced := config.GameMode == "player_paced"
 
+		if isPlayerPaced {
+			ensureSoloQuestionAssigned(&room, &currentPlayer)
+		}
 		if isPlayerPaced && currentPlayer.CurrentQuestionID != nil {
 			var question model.Question
 			if db.DB.First(&question, *currentPlayer.CurrentQuestionID).Error == nil {
@@ -1771,6 +2334,119 @@ func GetRoom(c *gin.Context) {
 	c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required: provide Authorization or X-Player-Token header"})
 }
 
+// GetRoomResults returns the final standings of a room to everyone who took
+// part: the host (Bearer JWT, must own the room) or a player (X-Player-Token
+// bound to the room).
+//
+// GetRoom's player response deliberately omits the roster — it is polled every
+// 2.5s during play, so returning it cost an unfiltered SELECT plus a GROUP BY
+// per poll. That left the results screen with no source for the leaderboard and
+// it rendered empty for players. This is the one endpoint that serves it, it is
+// read once at the end of a game, and it exposes scores only: no quiz, no
+// answer keys, no host details.
+//
+// For a finished room getRoomPlayers replays the archived rankings, whose ids
+// are synthetic positions rather than player ids (the real rows are deleted on
+// cleanup). So the caller's own row is marked server-side via the nickname in
+// their token — nicknames are unique per room — instead of leaving the client
+// to match on an id that no longer means anything.
+func GetRoomResults(c *gin.Context) {
+	roomIDStr := c.Param("id")
+	roomID, err := strconv.ParseUint(roomIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid room ID"})
+		return
+	}
+
+	// Authenticate before touching the DB: a room lookup ahead of this would
+	// answer "Room not found" vs. "Unauthorized" to anyone walking room ids.
+	callerNickname, hostID, ok := roomViewerAuth(c, uint(roomID))
+	if !ok {
+		return
+	}
+
+	var room model.Room
+	if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
+		return
+	}
+	if hostID != 0 && room.HostID != hostID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
+		return
+	}
+
+	players := getRoomPlayers(room.ID, room.Status)
+	// Archived rankings arrive sorted, a live room's rows do not. Sort here so
+	// the rank each client shows is the rank the server computed.
+	sort.SliceStable(players, func(i, j int) bool {
+		return players[i].Score > players[j].Score
+	})
+
+	standings := make([]gin.H, 0, len(players))
+	for i, p := range players {
+		standings = append(standings, gin.H{
+			"id":              p.ID,
+			"nickname":        p.Nickname,
+			"score":           p.Score,
+			"correct_answers": p.CorrectAnswers,
+			"rank":            i + 1,
+			"you":             callerNickname != "" && p.Nickname == callerNickname,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"room_id": room.ID,
+		"status":  room.Status,
+		"players": standings,
+		// Why the game ended, for a client that arrived after the push (or
+		// reloaded the results page, where the websocket payload is long gone).
+		"ended_reason": room.EndedReason,
+	})
+}
+
+// ensureSoloQuestionAssigned repairs a solo-mode player sitting in a running
+// room with no question assigned.
+//
+// current_question_id being NULL means two different things that look identical
+// on the row: the player answered their last question and is done, or the
+// player was never dealt a first question at all. The answer log tells them
+// apart — nobody who has answered nothing can have finished. Only the second
+// case is repaired; the first must keep reporting NO_MORE_QUESTIONS, which is
+// what sends the player to the results screen.
+//
+// StartGame and JoinRoom no longer race (both serialize on the room row), so
+// this should not trigger for new rooms. It stays because it costs one COUNT on
+// a path that is already reading the player, it heals rooms that were started
+// before that fix, and a player stranded here has no way out of the lobby
+// screen but a page reload.
+func ensureSoloQuestionAssigned(room *model.Room, pl *model.Player) {
+	if pl == nil || pl.ID == 0 || pl.CurrentQuestionID != nil || room.Status != "active" {
+		return
+	}
+	var answered int64
+	if err := db.DB.Model(&model.AnswerLog{}).
+		Where("room_id = ? AND player_id = ?", room.ID, pl.ID).Count(&answered).Error; err != nil {
+		return
+	}
+	if answered > 0 {
+		return // genuinely finished
+	}
+	var first model.Question
+	if err := db.DB.Where("quiz_id = ?", room.QuizID).
+		Order("questions.order ASC, questions.id ASC").First(&first).Error; err != nil {
+		return
+	}
+	if err := db.DB.Model(pl).UpdateColumns(map[string]interface{}{
+		"current_question_id":   first.ID,
+		"question_active_until": nil,
+	}).Error; err != nil {
+		return
+	}
+	log.Printf("[solo-repair] room %d player %d had no question assigned; dealt question %d", room.ID, pl.ID, first.ID)
+	pl.CurrentQuestionID = &first.ID
+	pl.QuestionActiveUntil = nil
+}
+
 // GetPlayerQuestion returns a question by index without the correct answer.
 // Requires X-Player-Token bound to this room.
 func GetPlayerQuestion(c *gin.Context) {
@@ -1833,6 +2509,7 @@ func GetPlayerQuestion(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
 			return
 		}
+		ensureSoloQuestionAssigned(&room, &pl)
 		if pl.CurrentQuestionID == nil {
 			c.JSON(http.StatusGone, gin.H{"error": "NO_MORE_QUESTIONS"})
 			return
@@ -1993,29 +2670,56 @@ func getRoomPlayers(roomID uint, status string) []model.Player {
 						Score:          r.Score,
 						CorrectAnswers: r.CorrectAnswers,
 					}
+					// CurrentQuestionID is nil here, which the host screen reads as
+					// "done" — correct for an archived game.
 				}
 			}
 		}
-	} else {
+		if len(players) > 0 {
+			return players
+		}
+		// Archive not readable yet — fall through to the live rows.
+		//
+		// finalizeRoom claims the "finished" status first, writes the
+		// game_sessions archive second, and deletes the player rows last (in a
+		// goroutine). Between the first and second step the room reads as
+		// finished while the archive does not exist, and this returned nothing.
+		// In solo mode the player whose own last answer ends the game is routed
+		// to the results screen inside exactly that window, so the person most
+		// certain to hit it is a real player, not a straggler. Measured live on
+		// a 1500-player room: the leaderboard came back with zero rows.
+		//
+		// The live rows are still present for the whole window, so reading them
+		// is both correct and the same data the archive is about to hold.
+	}
+	{
 		db.DB.Where("room_id = ?", roomID).Find(&players)
 
-		type PlayerCorrectCount struct {
+		// One aggregate for both numbers. Correct-only used to be its own query;
+		// solo mode also needs the total submitted (see Player.AnsweredCount), and
+		// a second GROUP BY over the same answer_logs table would double the cost
+		// of the host's 2s poll for nothing.
+		type PlayerAnswerCount struct {
 			PlayerID uint
-			Count    int
+			Answered int
+			Correct  int
 		}
-		var counts []PlayerCorrectCount
+		var counts []PlayerAnswerCount
 		db.DB.Model(&model.AnswerLog{}).
-			Select("player_id, count(*) as count").
-			Where("room_id = ? AND is_correct = ?", roomID, true).
+			Select("player_id, count(*) as answered, count(*) FILTER (WHERE is_correct) as correct").
+			Where("room_id = ?", roomID).
 			Group("player_id").
 			Scan(&counts)
 
-		countMap := make(map[uint]int)
+		type tally struct{ answered, correct int }
+		countMap := make(map[uint]tally, len(counts))
 		for _, c := range counts {
-			countMap[c.PlayerID] = c.Count
+			countMap[c.PlayerID] = tally{answered: c.Answered, correct: c.Correct}
 		}
 		for i := range players {
-			players[i].CorrectAnswers = countMap[players[i].ID]
+			t := countMap[players[i].ID]
+			players[i].CorrectAnswers = t.correct
+			players[i].AnsweredCount = t.answered
 		}
 	}
 	return players

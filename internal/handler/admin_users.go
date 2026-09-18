@@ -13,6 +13,7 @@ import (
 	"github.com/quizzzone/backend/internal/pkg/audit"
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 // AdminListUsers lists registered accounts (product Users + Admins) with license snapshot.
@@ -59,6 +60,8 @@ func AdminListUsers(c *gin.Context) {
 		return
 	}
 
+	subs := subscriptionsByUser(users)
+
 	out := make([]row, 0, len(users))
 	for _, u := range users {
 		r := row{
@@ -79,9 +82,17 @@ func AdminListUsers(c *gin.Context) {
 				r.AccountType = "user"
 			}
 		}
-		ents, _ := license.GetEntitlements(u.ID)
-		r.PlanID = ents.PlanID
-		r.PlanName = ents.PlanName
+		// The STORED plan, not the resolved entitlement — see the comment on
+		// AdminListSubscriptions. GetEntitlements reports "open" for everyone
+		// while enforcement is off, which disabled this page's revoke button for
+		// every account.
+		r.PlanID = license.PlanFree
+		if sub := subs[u.ID]; sub != nil {
+			r.PlanID = sub.PlanID
+			if sub.Plan != nil {
+				r.PlanName = sub.Plan.Name
+			}
+		}
 		out = append(out, r)
 	}
 
@@ -235,6 +246,7 @@ func AdminUpdateUserStatus(c *gin.Context) {
 	if !isActive {
 		if err := jwt.RevokeAllRefreshTokens(target.ID); err != nil {
 			log.Printf("[AdminUpdateUserStatus] failed to revoke refresh tokens for user %d: %v", target.ID, err)
+			notify.P1("revoke_tokens_failed", "Khoá tài khoản nhưng không thu hồi được refresh token (user=%d): %v — phiên cũ vẫn dùng được.", target.ID, err)
 		}
 	}
 

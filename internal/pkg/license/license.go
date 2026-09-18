@@ -18,17 +18,15 @@ const (
 
 // Enforcing reports whether Free/Pro limits actually block API actions.
 //
-// Driven by LICENSE_ENFORCEMENT (config.AppConfig.LicenseEnforcement), so the
-// gates flip on a restart rather than a rebuild. Defaults to false: a config
-// that failed to load must not lock every host out of the product.
+// Backed by the system_settings row license.enforcement, primed by
+// InitEnforcement at startup and updated in place by the admin toggle, so
+// flipping the gates is an API call rather than a container restart.
+// LICENSE_ENFORCEMENT=true still pins it on as a break-glass override.
+//
+// Defaults to false — see enforcement.go for the failure modes.
 //
 // See: LICENSING.md in this package.
-func Enforcing() bool {
-	if config.AppConfig == nil {
-		return false
-	}
-	return config.AppConfig.LicenseEnforcement
-}
+func Enforcing() bool { return enforcement.Load() }
 
 // Entitlements is the resolved limit set for a host.
 type Entitlements struct {
@@ -66,6 +64,11 @@ const (
 	SourceAdminAssign = "admin_assign"
 	SourceCodeRedeem  = "code_redeem"
 	SourceExpiryAuto  = "expiry_auto"
+	// SourceAdminRevoke is an admin clawing a grant back — the plan is taken
+	// away, not merely blocked from further redemption. It is a Source rather
+	// than a new Action because what happened to the subscription is still a
+	// downgrade; what is new is on whose authority.
+	SourceAdminRevoke = "admin_revoke"
 )
 
 // GrantContext is the provenance written alongside a subscription change.
@@ -84,12 +87,21 @@ type GrantContext struct {
 	IPAddress   string
 }
 
+// openMaxPlayers is the room cap while enforcement is off. Config rather than a
+// constant so raising the ceiling for a large event is a restart, not a rebuild.
+func openMaxPlayers() int {
+	if config.AppConfig == nil || config.AppConfig.MaxPlayersPerRoomOpen <= 0 {
+		return 2000
+	}
+	return config.AppConfig.MaxPlayersPerRoomOpen
+}
+
 // openEntitlements unlocks all commercial gates while enforcement is off.
 func openEntitlements() Entitlements {
 	return Entitlements{
 		PlanID:               "open",
 		PlanName:             "Open (license deferred)",
-		MaxPlayersPerRoom:    1000,
+		MaxPlayersPerRoom:    openMaxPlayers(),
 		MaxQuizzes:           -1,
 		MaxTemplates:         -1,
 		MaxConcurrentRooms:   -1,

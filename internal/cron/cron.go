@@ -10,6 +10,7 @@ import (
 	"github.com/quizzzone/backend/internal/handler"
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 // StartCleanupWorker runs a background worker that cleans up abandoned rooms every hour.
@@ -52,10 +53,64 @@ func StartLicenseExpiryWorker() {
 	}()
 }
 
+// StartLicenseWarningWorker warns hosts before their term lapses.
+//
+// Hourly, not every five minutes like the expiry sweep: a warning is not
+// time-critical to the minute, email.SendEmail is a synchronous SMTP dial, and an
+// hourly tick bounds the blast radius if the "already warned" marker is ever
+// wrong. WarnExpiringSubscriptions checks Enforcing() itself, so turning
+// enforcement off never mails anybody about a cut that will not happen.
+func StartLicenseWarningWorker() {
+	log.Println("Starting license expiry warning worker...")
+	go func() {
+		time.Sleep(60 * time.Second)
+		warnExpiringLicenses()
+
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			warnExpiringLicenses()
+		}
+	}()
+}
+
+func warnExpiringLicenses() {
+	sent, err := license.WarnExpiringSubscriptions()
+	if err != nil {
+		log.Printf("[CRON ERROR] license expiry warnings failed: %v\n", err)
+		notify.P1("cron_license_warn", "Gửi cảnh báo sắp hết hạn thất bại: %v — host sẽ bị cắt mà không được báo trước.", err)
+		return
+	}
+	if len(sent) > 0 {
+		log.Printf("[CRON] sent %d license expiry warning(s)", len(sent))
+	}
+}
+
+// StartSettingsRefreshWorker re-reads runtime toggles into their in-process
+// caches every minute.
+//
+// With one backend container this is belt-and-braces — the admin PUT updates
+// that process's cache synchronously. It earns its keep in two cases: a second
+// replica, where it is the only convergence mechanism (bounded at 60s), and a
+// flag changed straight in psql during an incident.
+func StartSettingsRefreshWorker() {
+	log.Println("Starting settings refresh worker...")
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			license.RefreshEnforcement()
+		}
+	}()
+}
+
 func sweepExpiredLicenses() {
 	grants, err := license.SweepExpiredSubscriptions()
 	if err != nil {
 		log.Printf("[CRON ERROR] license expiry sweep failed: %v\n", err)
+		notify.P1("cron_license_sweep", "Quét hết hạn license thất bại: %v — host hết hạn vẫn giữ quyền.", err)
 		return
 	}
 	if len(grants) == 0 {
@@ -70,7 +125,8 @@ func sweepExpiredLicenses() {
 			// Close through the handler's own finalize path so players get
 			// game:ended and the rankings are archived, exactly as if the host
 			// had pressed End Game.
-			if err := handler.FinalizeRoom(roomID); err != nil {
+			if err := handler.FinalizeRoomWithReason(roomID, handler.EndReasonLicenseExpired); err != nil {
+				notify.P1("cron_close_expired_room", "Không đóng được phòng của host hết hạn (room=%d host=%d): %v", roomID, g.UserID, err)
 				log.Printf("[CRON ERROR] could not close room %d of expired host %d: %v\n",
 					roomID, g.UserID, err)
 				continue
@@ -89,6 +145,7 @@ func cleanupAbandonedRooms() {
 	err := db.DB.Where("(status = 'waiting' OR status = 'active') AND updated_at < ?", threshold).Find(&abandonedRooms).Error
 	if err != nil {
 		log.Printf("[CRON ERROR] Failed to fetch active/waiting rooms: %v\n", err)
+		notify.P1("cron_fetch_rooms", "Cron không đọc được danh sách phòng active/waiting: %v — phòng bỏ hoang sẽ không được dọn.", err)
 		return
 	}
 
@@ -142,6 +199,7 @@ func cleanupAbandonedRooms() {
 			// so a failed archive must not be followed by a cleanup.
 			if err := db.DB.Create(&session).Error; err != nil {
 				log.Printf("[CRON ERROR] Failed to archive room %d, keeping players and answer logs: %v\n", room.ID, err)
+				notify.P1("cron_archive_failed", "Lưu trữ phòng bỏ hoang thất bại (room=%d): %v — kết quả trận đấu chưa được archive.", room.ID, err)
 				continue
 			}
 		}

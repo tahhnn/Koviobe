@@ -136,7 +136,7 @@ func RequirePermission(requiredPermission string) gin.HandlerFunc {
 		}
 
 		if !hasPermission {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Forbidden: missing permission '" + requiredPermission + "'"})
+			c.JSON(http.StatusForbidden, gin.H{"error": "Forbidden: missing permission", "permission": requiredPermission})
 			c.Abort()
 			return
 		}

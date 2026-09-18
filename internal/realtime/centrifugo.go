@@ -12,6 +12,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/quizzzone/backend/internal/config"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 type CentrifugoClient struct {
@@ -136,6 +137,7 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 	resp, err := publishHTTPClient.Do(req)
 	if err != nil {
 		log.Printf("[Centrifugo] Publish request failed (%s): %v", url, err)
+		notify.P0("centrifugo_unreachable", "Không gọi được Centrifugo (%s): %v — phòng đang chơi sẽ đứng, host bấm Next mà người chơi không nhận được gì.", url, err)
 		return fmt.Errorf("failed to send request to Centrifugo: %v", err)
 	}
 	defer resp.Body.Close()
@@ -143,6 +145,7 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 	respBytes, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Centrifugo] Publish non-OK status=%d body=%s url=%s", resp.StatusCode, string(respBytes), url)
+		notify.P0("centrifugo_status", "Centrifugo trả status=%d khi publish (%s): %s", resp.StatusCode, url, string(respBytes))
 		return fmt.Errorf("centrifugo api returned status %d: %s", resp.StatusCode, string(respBytes))
 	}
 
@@ -151,6 +154,7 @@ func (c *CentrifugoClient) Publish(channel string, event string, payload interfa
 		if err := json.Unmarshal(respBytes, &respBody); err == nil {
 			if centrifugoErr, ok := respBody["error"]; ok && centrifugoErr != nil {
 				log.Printf("[Centrifugo] API error while publishing event %s: %v", event, centrifugoErr)
+				notify.P0("centrifugo_api_error", "Centrifugo API báo lỗi khi publish event %q: %v", event, centrifugoErr)
 				return fmt.Errorf("centrifugo api error: %v", centrifugoErr)
 			}
 		}
