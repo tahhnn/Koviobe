@@ -21,6 +21,7 @@ import (
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"github.com/quizzzone/backend/internal/pkg/notify"
+	"github.com/quizzzone/backend/internal/pkg/theme"
 	"github.com/quizzzone/backend/internal/realtime"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -31,6 +32,80 @@ type CreateQuizReq struct {
 	Description string        `json:"description"`
 	ThemeConfig string        `json:"theme_config"` // Receives custom theme settings
 	Questions   []QuestionReq `json:"questions"`
+}
+
+// UpdateQuizReq is the body of PUT /quizzes/:id.
+//
+// It carries no sharing flags: is_public and allow_edit belong to the owner and
+// are only writable through PATCH /quizzes/:id/sharing, or anyone holding edit
+// rights on a public quiz could change who else may edit it.
+type UpdateQuizReq struct {
+	CreateQuizReq
+	// ExpectedUpdatedAt is quizzes.updated_at as the editor loaded it. When
+	// present the write only lands if the row has not moved since, which is
+	// what stops two people editing a public quiz from overwriting each other.
+	// Optional so an older client keeps working — it just keeps the old
+	// last-write-wins behaviour.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at"`
+}
+
+// vetThemeConfig sanitizes a submitted theme and applies the plan gates,
+// returning the JSON to store.
+//
+// Both CreateQuiz and UpdateQuiz call it. They used to differ: create checked
+// the plan, update assigned req.ThemeConfig straight onto the row, so a host
+// blocked from branding on POST got it by sending the same body as a PUT. One
+// function is the only way those two stay in step.
+//
+// On a rejection it writes the response and returns false; the caller returns
+// without touching the database.
+// enforcing is passed in rather than read from license.Enforcing() inside, so
+// the gates can be tested without reaching for package state a test in another
+// package cannot set.
+func vetThemeConfig(c *gin.Context, ents license.Entitlements, enforcing bool, raw string) (string, bool) {
+	// Sanitize first. The gates below ask what the theme sets, and they should
+	// be asking about the values that would actually be stored — an off-site
+	// bg_host_url is dropped here, so it must not then trip the branding gate
+	// and tell the host to upgrade for something they are not getting.
+	clean, err := theme.Sanitize(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid theme_config"})
+		return "", false
+	}
+
+	if !enforcing {
+		return clean, true
+	}
+
+	if theme.RequestsPlayerPaced(clean) && !ents.AllowPlayerPaced {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Player-paced mode requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_player_paced",
+		})
+		return "", false
+	}
+
+	if keys := theme.BrandingKeys(clean); len(keys) > 0 && !ents.AllowCustomBranding {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Custom branding requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_custom_branding",
+			"fields":  keys,
+		})
+		return "", false
+	}
+
+	if theme.WantsRemoveWatermark(clean) && !ents.AllowRemoveWatermark {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Removing watermark requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_remove_watermark",
+		})
+		return "", false
+	}
+
+	return clean, true
 }
 
 type QuestionReq struct {
@@ -103,34 +178,9 @@ func CreateQuiz(c *gin.Context) {
 		return
 	}
 
-	if license.Enforcing() && license.ThemeRequestsPlayerPaced(req.ThemeConfig) && !ents.AllowPlayerPaced {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error":   "Player-paced mode requires Pro plan",
-			"plan_id": ents.PlanID,
-			"feature": "allow_player_paced",
-		})
+	themeConfig, themeOK := vetThemeConfig(c, ents, license.Enforcing(), req.ThemeConfig)
+	if !themeOK {
 		return
-	}
-
-	if license.Enforcing() && !ents.AllowCustomBranding && req.ThemeConfig != "" && req.ThemeConfig != "{}" {
-		// Free may still store basic theme; only block advanced branding keys if present
-		var theme map[string]interface{}
-		if json.Unmarshal([]byte(req.ThemeConfig), &theme) == nil {
-			if _, ok := theme["logo_url"]; ok && !ents.AllowCustomBranding {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "Custom branding (logo) requires Pro plan",
-					"feature": "allow_custom_branding",
-				})
-				return
-			}
-			if _, ok := theme["remove_watermark"]; ok && !ents.AllowRemoveWatermark {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "Removing watermark requires Pro plan",
-					"feature": "allow_remove_watermark",
-				})
-				return
-			}
-		}
 	}
 
 	tx := db.DB.Begin()
@@ -139,7 +189,7 @@ func CreateQuiz(c *gin.Context) {
 		HostID:      userID.(uint),
 		Title:       req.Title,
 		Description: req.Description,
-		ThemeConfig: req.ThemeConfig,
+		ThemeConfig: themeConfig,
 	}
 
 	if err := tx.Create(&quiz).Error; err != nil {
@@ -215,6 +265,10 @@ func ListQuizzes(c *gin.Context) {
 		CreatedAt     time.Time `json:"created_at"`
 		UpdatedAt     time.Time `json:"updated_at"`
 		QuestionCount int64     `json:"question_count"`
+		// So the owner's own list can show which of their quizzes are shared
+		// without a second round trip per card.
+		IsPublic  bool `json:"is_public"`
+		AllowEdit bool `json:"allow_edit"`
 	}
 
 	var quizzes []model.Quiz
@@ -256,6 +310,8 @@ func ListQuizzes(c *gin.Context) {
 			CreatedAt:     q.CreatedAt,
 			UpdatedAt:     q.UpdatedAt,
 			QuestionCount: counts[q.ID],
+			IsPublic:      q.IsPublic,
+			AllowEdit:     q.AllowEdit,
 		})
 	}
 
@@ -271,15 +327,49 @@ func GetQuiz(c *gin.Context) {
 		return
 	}
 
+	// Loaded without the owner filter so a shared quiz resolves; rightsOn then
+	// decides. The response carries the correct answers and the explanation
+	// slides, which is exactly what publishing a quiz gives away — the warning
+	// belongs on the share toggle in the UI, not here.
 	var quiz model.Quiz
 	if err := db.DB.Preload("Questions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("questions.order ASC, questions.id ASC")
-	}).Where("id = ? AND host_id = ?", uint(id), userID.(uint)).First(&quiz).Error; err != nil {
+	}).Where("id = ?", uint(id)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, quiz)
+	rights := rightsOn(&quiz, userID.(uint))
+	if !rights.View {
+		denyQuizAccess(c, rights)
+		return
+	}
+
+	// Always a JSON array, never null: the model tag omits an empty list, and a
+	// hand-built map would send null instead.
+	questions := quiz.Questions
+	if questions == nil {
+		questions = []model.Question{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":           quiz.ID,
+		"host_id":      quiz.HostID,
+		"title":        quiz.Title,
+		"description":  quiz.Description,
+		"theme_config": quiz.ThemeConfig,
+		"is_public":    quiz.IsPublic,
+		"allow_edit":   quiz.AllowEdit,
+		"questions":    questions,
+		"created_at":   quiz.CreatedAt,
+		"updated_at":   quiz.UpdatedAt,
+		// What this caller may do, so the editor does not have to re-derive the
+		// rule client-side and get it wrong.
+		"is_owner": rights.Owner,
+		"can_edit": rights.Edit,
+		"can_host": rights.Host,
+		"can_copy": rights.Copy,
+	})
 }
 
 // Room & Game Control Handlers
@@ -327,10 +417,16 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
-	// Verify quiz exists and belongs to host
+	// Verify the quiz exists and that this host may run it: their own, or one
+	// its owner published. The room still records uid as HostID, so the room,
+	// its players and its logs belong to whoever opened it, not to the author.
 	var quiz model.Quiz
-	if err := db.DB.Preload("Questions").Where("id = ? AND host_id = ?", uint(quizID), uid).First(&quiz).Error; err != nil {
+	if err := db.DB.Preload("Questions").Where("id = ?", uint(quizID)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
+		return
+	}
+	if rights := rightsOn(&quiz, uid); !rights.Host {
+		denyQuizAccess(c, rights)
 		return
 	}
 
@@ -348,11 +444,32 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
-	if license.Enforcing() && license.ThemeRequestsPlayerPaced(quiz.ThemeConfig) && !ents.AllowPlayerPaced {
+	// The mode this room will run. Taken from the request, falling back to
+	// whatever the quiz was last saved with so an older client that sends
+	// nothing keeps behaving exactly as before.
+	gameMode := ""
+	if raw := c.Query("game_mode"); raw != "" {
+		gameMode = normalizeGameMode(raw)
+	} else if license.ThemeRequestsPlayerPaced(quiz.ThemeConfig) {
+		gameMode = "player_paced"
+	} else {
+		gameMode = "host_paced"
+	}
+
+	// Gated on the mode this room will actually run, not on the quiz's stored
+	// one: the host picks the mode per game now, so the quiz's saved value is
+	// no longer what they are asking for.
+	if license.Enforcing() && gameMode == "player_paced" && !ents.AllowPlayerPaced {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "This quiz uses player-paced mode which requires Pro plan",
 			"feature": "allow_player_paced",
 		})
+		return
+	}
+
+	roomTheme, err := withGameMode(quiz.ThemeConfig, gameMode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare room settings"})
 		return
 	}
 
@@ -405,7 +522,7 @@ func CreateRoom(c *gin.Context) {
 		HostID:               uid,
 		Status:               "waiting",
 		IsPrivate:            isPrivate,
-		ThemeConfig:          quiz.ThemeConfig, // Inherit theme config directly from Quiz
+		ThemeConfig:          roomTheme, // Quiz's theme, with this game's mode applied
 		CurrentQuestionIndex: -1,
 	}
 
@@ -994,11 +1111,7 @@ func sanitizePlayerOptions(raw string) interface{} {
 }
 
 func roomGameMode(themeConfig string) string {
-	var cfg struct {
-		GameMode string `json:"game_mode"`
-	}
-	_ = json.Unmarshal([]byte(themeConfig), &cfg)
-	return cfg.GameMode
+	return theme.Parse(themeConfig).GameMode
 }
 
 // evaluateAnswer scores a submission. pin_answer uses % distance tolerance (default 8%).
@@ -1964,19 +2077,44 @@ func UpdateQuiz(c *gin.Context) {
 		return
 	}
 
-	var req CreateQuizReq
+	var req UpdateQuizReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	var quiz model.Quiz
-	if err := db.DB.Where("id = ? AND host_id = ?", uint(id), userID.(uint)).First(&quiz).Error; err != nil {
+	if err := db.DB.Where("id = ?", uint(id)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
+	if rights := rightsOn(&quiz, userID.(uint)); !rights.Edit {
+		denyQuizAccess(c, rights)
+		return
+	}
 
-	ents, err := license.GetEntitlements(userID.(uint))
+	// Every gameplay step reads the questions live, and the sync below deletes
+	// the ones missing from the payload — so an edit landing mid-game rewrites
+	// the question list under a room that is already running it. A shared quiz
+	// can be edited and hosted by different people at once, so the room at risk
+	// is very often not the editor's own and not on their screen. That is
+	// exactly why this check cannot be left to the UI.
+	live, err := quizHasActiveRoom(quiz.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check running rooms"})
+		return
+	}
+	if live {
+		c.JSON(http.StatusConflict, gin.H{"error": "Quiz is being played right now"})
+		return
+	}
+
+	// Entitlements come from the quiz owner, not the editor. The limits belong
+	// to whoever owns the resource: otherwise a Free editor saving a Pro host's
+	// 60-question quiz is rejected for a quota that is not theirs, and
+	// vetThemeConfig below would strip the owner's branding. For the owner
+	// editing their own quiz this is the same lookup as before.
+	ents, err := license.GetEntitlements(quiz.HostID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"})
 		return
@@ -1992,14 +2130,42 @@ func UpdateQuiz(c *gin.Context) {
 	tx := db.DB.Begin()
 
 	// Update quiz fields
-	quiz.Title = req.Title
-	quiz.Description = req.Description
-	quiz.ThemeConfig = req.ThemeConfig
-	if err := tx.Save(&quiz).Error; err != nil {
+	themeConfig, themeOK := vetThemeConfig(c, ents, license.Enforcing(), req.ThemeConfig)
+	if !themeOK {
+		tx.Rollback()
+		return
+	}
+
+	// Compare-and-swap on updated_at rather than Save: this handler replaces the
+	// whole question list, so two people editing the same quiz would otherwise
+	// silently overwrite each other. The check runs inside the UPDATE, because
+	// comparing in Go and then saving leaves a window between the two.
+	//
+	// The flags are absent from the map on purpose — is_public and allow_edit
+	// are the owner's, and are only writable through PATCH /quizzes/:id/sharing.
+	updates := map[string]interface{}{
+		"title":        req.Title,
+		"description":  req.Description,
+		"theme_config": themeConfig,
+	}
+	cas := tx.Model(&model.Quiz{}).Where("id = ?", quiz.ID)
+	if req.ExpectedUpdatedAt != nil {
+		cas = cas.Where("updated_at = ?", *req.ExpectedUpdatedAt)
+	}
+	res := cas.Updates(updates)
+	if res.Error != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update quiz"})
 		return
 	}
+	if res.RowsAffected == 0 {
+		tx.Rollback()
+		c.JSON(http.StatusConflict, gin.H{"error": "Quiz was changed by someone else"})
+		return
+	}
+	quiz.Title = req.Title
+	quiz.Description = req.Description
+	quiz.ThemeConfig = themeConfig
 
 	// Sync questions:
 	// 1. Get existing questions for this quiz
@@ -2401,6 +2567,12 @@ func GetRoomResults(c *gin.Context) {
 		// Why the game ended, for a client that arrived after the push (or
 		// reloaded the results page, where the websocket payload is long gone).
 		"ended_reason": room.EndedReason,
+		// The host's branding. The results screen is where a room spends its
+		// last minute — the host reads out the podium off the projector while
+		// everyone checks their own rank — so it is the one screen where the
+		// event's key visual is most worth keeping, and it was the only game
+		// screen still falling back to the plain gradient.
+		"theme_config": room.ThemeConfig,
 	})
 }
 

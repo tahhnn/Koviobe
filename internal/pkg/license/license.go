@@ -1,13 +1,13 @@
 package license
 
 import (
-	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/theme"
 	"gorm.io/gorm"
 )
 
@@ -413,17 +413,12 @@ func UpdatePlanLimits(planID string, patch map[string]interface{}) (*model.Prici
 }
 
 // ThemeRequestsPlayerPaced checks theme_config JSON for player_paced mode.
+//
+// Kept as the name the license checks call, but the parsing lives in the theme
+// package: three copies of "unmarshal theme_config and look at game_mode" drift
+// apart the first time the key is renamed or a second mode appears.
 func ThemeRequestsPlayerPaced(themeConfig string) bool {
-	if themeConfig == "" {
-		return false
-	}
-	var cfg struct {
-		GameMode string `json:"game_mode"`
-	}
-	if err := json.Unmarshal([]byte(themeConfig), &cfg); err != nil {
-		return false
-	}
-	return cfg.GameMode == "player_paced"
+	return theme.RequestsPlayerPaced(themeConfig)
 }
 
 // IsUnlimited reports whether a limit value means unlimited (-1).

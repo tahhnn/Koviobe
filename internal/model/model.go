@@ -41,15 +41,28 @@ type User struct {
 
 // Quiz represents a questionnaire created by a Host.
 type Quiz struct {
-	ID          uint           `gorm:"primaryKey" json:"id"`
-	HostID      uint           `gorm:"index;not null" json:"host_id"`
-	Title       string         `gorm:"size:255;not null" json:"title"`
-	Description string         `gorm:"type:text" json:"description"`
-	ThemeConfig string         `gorm:"type:text" json:"theme_config"` // JSON string containing custom theme colors/bg for this quiz
-	Questions   []Question     `gorm:"foreignKey:QuizID;constraint:OnDelete:CASCADE" json:"questions,omitempty"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
+	ID          uint   `gorm:"primaryKey" json:"id"`
+	HostID      uint   `gorm:"index;not null" json:"host_id"`
+	Title       string `gorm:"size:255;not null" json:"title"`
+	Description string `gorm:"type:text" json:"description"`
+	ThemeConfig string `gorm:"type:text" json:"theme_config"` // JSON string containing custom theme colors/bg for this quiz
+	// Sharing. IsPublic lists the quiz for every host and lets them open a room
+	// from it or take their own copy; AllowEdit additionally opens the original
+	// to everyone's edits. Deleting, and changing these two flags, are never
+	// shared — both stay with HostID.
+	//
+	// `default:false` is load-bearing in both directions. Without it AutoMigrate
+	// emits ADD COLUMN ... NOT NULL with no default, which Postgres rejects on a
+	// populated table ("contains null values") and the container exits on the
+	// migration. With it, the DB default matches Go's zero value, so GORM
+	// skipping a false field on INSERT still stores false — the pricing_plans
+	// trap only bites when the two disagree, as `default:true` would.
+	IsPublic  bool           `gorm:"index;not null;default:false" json:"is_public"`
+	AllowEdit bool           `gorm:"not null;default:false" json:"allow_edit"`
+	Questions []Question     `gorm:"foreignKey:QuizID;constraint:OnDelete:CASCADE" json:"questions,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // Question represents an individual query within a Quiz.
