@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -1175,20 +1176,11 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	var player model.Player
-	if err := db.DB.First(&player, playerClaims.PlayerID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
-		return
-	}
-
-	// Extra check: ensure token's room matches the player's actual room
-	if player.RoomID != playerClaims.RoomID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
-		return
-	}
-
+	// The player row is not read here: the transaction below locks and reads
+	// it anyway, and checks there that it belongs to the token's room. Reading
+	// it twice was one more round trip per answer for nothing.
 	var room model.Room
-	db.DB.First(&room, player.RoomID)
+	db.DB.First(&room, playerClaims.RoomID)
 
 	if room.Status != "active" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
@@ -1229,31 +1221,48 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	var existingLog model.AnswerLog
-	existingErr := db.DB.Where("player_id = ? AND question_id = ?", player.ID, req.QuestionID).First(&existingLog).Error
-	if existingErr == nil {
+	// Repeat check, from Redis (answer_claim.go). The unique index on
+	// answer_logs stays the real guarantee; this only spares the database the
+	// lookup. With Redis unavailable, fall back to asking the database — Take,
+	// not First, so the lookup rides the unique index instead of an ORDER BY.
+	claimed, redisOK := claimAnswer(c.Request.Context(), playerClaims.PlayerID, req.QuestionID)
+	if redisOK && !claimed {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
 		return
+	}
+	if !redisOK {
+		var existingLog model.AnswerLog
+		if db.DB.Where("player_id = ? AND question_id = ?", playerClaims.PlayerID, req.QuestionID).
+			Take(&existingLog).Error == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
+			return
+		}
 	}
 
 	isCorrect := evaluateAnswer(question, req.SelectedOption)
 	pointsEarned := 0
 	var responseTimeMs int
-	finalScore := player.Score
+	finalScore := 0
 	timedOut := false
 	playerFinished := false
+	var player model.Player
 
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		// Lock player row to prevent concurrent double-submit
 		var lockedPlayer model.Player
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, player.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, playerClaims.PlayerID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("player_not_found")
+			}
 			return err
 		}
-
-		var dup model.AnswerLog
-		if err := tx.Where("player_id = ? AND question_id = ?", lockedPlayer.ID, req.QuestionID).First(&dup).Error; err == nil {
-			return fmt.Errorf("already_answered")
+		// Extra check: ensure token's room matches the player's actual room
+		if lockedPlayer.RoomID != playerClaims.RoomID {
+			return fmt.Errorf("token_room_mismatch")
 		}
+		player = lockedPlayer
+		// No repeat SELECT here any more: the claim above filtered the ordinary
+		// case, and the INSERT below hits idx_player_question for the rest.
 
 		if isPlayerPaced {
 			// The status read before this transaction is not a guarantee: a submit
@@ -1415,7 +1424,16 @@ func SubmitAnswer(c *gin.Context) {
 	})
 
 	if err != nil {
+		// Nothing was recorded, so the claim must not stand — except for a
+		// repeat, where the claim is exactly right.
+		if claimed && err.Error() != "already_answered" {
+			releaseAnswer(playerClaims.PlayerID, req.QuestionID)
+		}
 		switch err.Error() {
+		case "player_not_found":
+			c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
+		case "token_room_mismatch":
+			c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
 		case "already_answered":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
 		case "question_not_active":
