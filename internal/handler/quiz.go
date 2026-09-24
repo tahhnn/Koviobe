@@ -674,9 +674,19 @@ func JoinRoom(c *gin.Context) {
 	// burst — exactly the case a full room attracts.
 	roomFull := false
 	roomStarted := false
+	// The exclusive lock is only needed to make count-then-insert atomic, and
+	// the count only matters when the cap is enforced. With enforcement off it
+	// serialised every join in the room to protect a branch that never fires.
+	// The status re-check below still needs the room held still, but SHARE does
+	// that: it blocks StartGame's update until this transaction commits while
+	// letting other joiners hold the same lock at the same time.
+	lockStrength := "SHARE"
+	if license.Enforcing() {
+		lockStrength = "UPDATE"
+	}
 	txErr := db.DB.Transaction(func(tx *gorm.DB) error {
 		var lockedRoom model.Room
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: lockStrength}).First(&lockedRoom, room.ID).Error; err != nil {
 			return err
 		}
 
@@ -691,13 +701,17 @@ func JoinRoom(c *gin.Context) {
 			return fmt.Errorf("room_started")
 		}
 
-		var playerCount int64
-		if err := tx.Model(&model.Player{}).Where("room_id = ?", lockedRoom.ID).Count(&playerCount).Error; err != nil {
-			return err
-		}
-		if license.Enforcing() && int(playerCount) >= maxPlayers {
-			roomFull = true
-			return fmt.Errorf("room_full")
+		// Only counted when the answer can change the outcome. Outside
+		// enforcement this was a full count of the room on every single join.
+		if license.Enforcing() {
+			var playerCount int64
+			if err := tx.Model(&model.Player{}).Where("room_id = ?", lockedRoom.ID).Count(&playerCount).Error; err != nil {
+				return err
+			}
+			if int(playerCount) >= maxPlayers {
+				roomFull = true
+				return fmt.Errorf("room_full")
+			}
 		}
 
 		return tx.Create(&player).Error
@@ -1194,10 +1208,19 @@ func SubmitAnswer(c *gin.Context) {
 	json.Unmarshal([]byte(room.ThemeConfig), &config)
 	isPlayerPaced := config.GameMode == "player_paced"
 
-	var question model.Question
-	if err := db.DB.First(&question, req.QuestionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
 		return
+	}
+	question, _, inQuiz := qset.byID(req.QuestionID)
+	if !inQuiz {
+		// Off the hot path: only a bad or foreign id gets here, and the DB read
+		// keeps the two error messages distinct as they always were.
+		if err := db.DB.First(&question, req.QuestionID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
+			return
+		}
 	}
 
 	// Security check: ensure question belongs to room's quiz
@@ -1303,17 +1326,10 @@ func SubmitAnswer(c *gin.Context) {
 				lockedPlayer.Score += pointsEarned
 			}
 
-			var questions []model.Question
-			if err := tx.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&questions).Error; err != nil {
-				return err
-			}
-
+			questions := qset.list
 			nextIdx := -1
-			for idx, q := range questions {
-				if q.ID == req.QuestionID {
-					nextIdx = idx + 1
-					break
-				}
+			if _, at, ok := qset.byID(req.QuestionID); ok {
+				nextIdx = at + 1
 			}
 			if nextIdx > 0 && nextIdx < len(questions) {
 				nextQ := questions[nextIdx]
@@ -1330,8 +1346,17 @@ func SubmitAnswer(c *gin.Context) {
 			}
 			finalScore = lockedPlayer.Score
 		} else {
+			// SHARE, not UPDATE: this branch only reads the room — its status,
+			// its current question and its deadline — and never writes the row.
+			// An exclusive lock here put every answer in the room behind the
+			// same row: measured 2026-09-23 under a 2000-player burst at 24.7ms
+			// average for this one statement and 97% of all database time, with
+			// zero disk reads, so it was queueing rather than working. SHARE
+			// still blocks NextQuestion and finalizeRoom from moving the room
+			// out from under a submission in flight, which is the whole reason
+			// the lock is here, but submissions no longer block each other.
 			var lockedRoom model.Room
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
 				return err
 			}
 			// finalizeRoom nulls current_question_id in the same update that flips
@@ -1694,35 +1719,37 @@ func roomStandings(room *model.Room, callerNickname string) ([]StandingRow, *Sta
 		return top, me, len(players)
 	}
 
+	// Live room: everyone else's rows come from a snapshot shared by the room
+	// for a second (standings_cache.go). A failed read degrades to an empty
+	// board, as the per-request queries it replaces did.
+	rows, _ := roomSnapshot(room.ID)
 	top := make([]StandingRow, 0, leaderboardTopN)
-	db.DB.Model(&model.Player{}).
-		Select("id, nickname, score").
-		Where("room_id = ?", room.ID).
-		Order("score DESC, id ASC").
-		Limit(leaderboardTopN).
-		Scan(&top)
-	for i := range top {
-		top[i].Rank = i + 1
+	for i := 0; i < len(rows) && i < leaderboardTopN; i++ {
+		top = append(top, rows[i])
 	}
 
-	var total int64
-	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&total)
-
+	// The caller's own row is read live, never from the snapshot: in solo mode
+	// a player opens the board right after their own answer lands, and showing
+	// them the score from before it would read as a lost answer. One indexed
+	// lookup; the rank is placed against the snapshot rather than counted.
 	var me *StandingRow
 	if callerNickname != "" {
 		var self model.Player
-		if err := db.DB.Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
-			// A COUNT of the players ahead, not a scan of the roster: every
-			// player in the room asks for this after every question, so the cost
-			// has to stay flat as the room grows.
-			var ahead int64
-			db.DB.Model(&model.Player{}).
-				Where("room_id = ? AND (score > ? OR (score = ? AND id < ?))", room.ID, self.Score, self.Score, self.ID).
-				Count(&ahead)
-			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score, Rank: int(ahead) + 1}
+		if err := db.DB.Select("id, nickname, score").
+			Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
+			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score,
+				Rank: rankAgainst(rows, self.Score, self.ID)}
+			// And the same score on their own line of the top list, so the slide
+			// never shows one player two different scores. top is this request's
+			// copy, not the shared snapshot.
+			for i := range top {
+				if top[i].ID == self.ID {
+					top[i].Score = self.Score
+				}
+			}
 		}
 	}
-	return top, me, int(total)
+	return top, me, len(rows)
 }
 
 // roomViewerAuth identifies the caller of a read-only room endpoint: a player
@@ -1906,6 +1933,33 @@ func FinalizeRoom(roomID uint) error {
 	return FinalizeRoomWithReason(roomID, EndReasonHost)
 }
 
+// CorrectAnswerCounts returns, for one room, how many correct answers each
+// player gave — in a single grouped query rather than one per player. Shared
+// with the cron that closes abandoned rooms, which had the same loop.
+// Served by idx_answer_logs_room_id.
+func CorrectAnswerCounts(roomID uint) map[uint]int64 {
+	type row struct {
+		PlayerID uint
+		N        int64
+	}
+	var rows []row
+	if err := db.DB.Model(&model.AnswerLog{}).
+		Select("player_id, count(*) AS n").
+		Where("room_id = ? AND is_correct = ?", roomID, true).
+		Group("player_id").
+		Scan(&rows).Error; err != nil {
+		// A missing count costs a zero in the rankings; losing the archive
+		// would cost the whole game, so this never aborts the close.
+		log.Printf("[CorrectAnswerCounts] room %d: %v", roomID, err)
+		return map[uint]int64{}
+	}
+	out := make(map[uint]int64, len(rows))
+	for _, r := range rows {
+		out[r.PlayerID] = r.N
+	}
+	return out
+}
+
 // Why a room closed. Protocol values, never prose: the client branches on them,
 // so they are deliberately absent from the i18n catalog — same discipline as the
 // NO_MORE_QUESTIONS / ROOM_FINISHED sentinels.
@@ -1971,13 +2025,15 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 	var players []model.Player
 	db.DB.Where("room_id = ?", room.ID).Find(&players)
 
+	// One grouped count for the whole room, not one query per player: a
+	// 2000-seat room used to close with 2000 round trips.
+	correctByPlayer := CorrectAnswerCounts(room.ID)
+
 	for _, p := range players {
-		var correctCount int64
-		db.DB.Model(&model.AnswerLog{}).Where("player_id = ? AND is_correct = ?", p.ID, true).Count(&correctCount)
 		rankings = append(rankings, finalRanking{
 			Nickname:       p.Nickname,
 			Score:          p.Score,
-			CorrectAnswers: int(correctCount),
+			CorrectAnswers: int(correctByPlayer[p.ID]),
 		})
 	}
 	sort.Slice(rankings, func(i, j int) bool {
@@ -2270,6 +2326,7 @@ func UpdateQuiz(c *gin.Context) {
 	}
 
 	tx.Commit()
+	invalidateQuizQuestions(quiz.ID)
 
 	// Record Audit Log
 	audit.Record(userID.(uint), "update_quiz", fmt.Sprintf("quiz_%d", quiz.ID), c.ClientIP())
@@ -2300,6 +2357,7 @@ func DeleteQuiz(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete quiz"})
 		return
 	}
+	invalidateQuizQuestions(quiz.ID)
 
 	// Record Audit Log
 	audit.Record(userID.(uint), "delete_quiz", fmt.Sprintf("quiz_%d", id), c.ClientIP())
@@ -2353,8 +2411,16 @@ func GetRoom(c *gin.Context) {
 		//
 		// The host path below still returns the full roster — it is the one caller
 		// that actually renders it.
-		var playerCount int64
-		db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
+		// player_count, max_players and plan_name used to be computed here too —
+		// a COUNT over the room's players and a license lookup on every poll,
+		// the single largest DB cost under load (measured 2026-09-24), for three
+		// fields the play page never reads. The host branch still returns them.
+		qset, err := quizQuestions(room.QuizID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
+			return
+		}
+		qCount := int64(len(qset.list))
 
 		var currentPlayer model.Player
 		var activeQuestionInfo interface{}
@@ -2370,23 +2436,12 @@ func GetRoom(c *gin.Context) {
 			ensureSoloQuestionAssigned(&room, &currentPlayer)
 		}
 		if isPlayerPaced && currentPlayer.CurrentQuestionID != nil {
-			var question model.Question
-			if db.DB.First(&question, *currentPlayer.CurrentQuestionID).Error == nil {
+			if question, qIndex, ok := qset.byID(*currentPlayer.CurrentQuestionID); ok {
 				// Start per-player timer on first view of the question
 				if currentPlayer.QuestionActiveUntil == nil {
 					until := time.Now().Add(time.Duration(question.Duration) * time.Second)
 					currentPlayer.QuestionActiveUntil = &until
 					db.DB.Model(&currentPlayer).Update("question_active_until", until)
-				}
-				qIndex := 0
-				var allQs []model.Question
-				if db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&allQs).Error == nil {
-					for i, q := range allQs {
-						if q.ID == question.ID {
-							qIndex = i
-							break
-						}
-					}
 				}
 				activeInfo := gin.H{
 					"id":       question.ID,
@@ -2395,7 +2450,7 @@ func GetRoom(c *gin.Context) {
 					"options":  sanitizePlayerOptions(question.Options),
 					"duration": question.Duration,
 					"index":    qIndex,
-					"total":    len(allQs),
+					"total":    len(qset.list),
 				}
 				if currentPlayer.QuestionActiveUntil != nil {
 					activeInfo["active_until"] = currentPlayer.QuestionActiveUntil.UTC().Format(time.RFC3339)
@@ -2407,16 +2462,12 @@ func GetRoom(c *gin.Context) {
 		}
 
 		// Return limited info: no quiz details, no host_id, no pin_code
-		var qCount int64
-		db.DB.Model(&model.Question{}).Where("quiz_id = ?", room.QuizID).Count(&qCount)
-
 		if !isPlayerPaced && room.CurrentQuestionID != nil {
 			// Host-paced rooms used to fall through with current_question: null even
 			// mid-question, so a player who reloaded had no server deadline to resync
 			// against and their timer restarted at full duration. The room row already
 			// carries the active question and its deadline — this just reports them.
-			var question model.Question
-			if db.DB.First(&question, *room.CurrentQuestionID).Error == nil {
+			if question, _, ok := qset.byID(*room.CurrentQuestionID); ok {
 				activeInfo := gin.H{
 					"id":       question.ID,
 					"content":  question.Content,
@@ -2434,21 +2485,16 @@ func GetRoom(c *gin.Context) {
 				activeQuestionInfo = activeInfo
 			}
 		}
-		entsPlayer, _ := license.GetEntitlements(room.HostID)
-
 		c.JSON(http.StatusOK, gin.H{
 			"id":           room.ID,
 			"status":       room.Status,
 			"theme_config": room.ThemeConfig,
-			// "players" is deliberately absent. The frontend already falls back to
-			// an empty array (app/actions/quizzes.ts) and reads player_count from
-			// its own field, so nothing downstream needs the roster here.
+			// "players" is deliberately absent, and so are player_count,
+			// max_players and plan_name — lib/game-session.ts defaults all four
+			// and the play page reads none of them.
 			"current_question":       activeQuestionInfo,
 			"question_count":         qCount,
 			"current_question_index": room.CurrentQuestionIndex,
-			"max_players":            entsPlayer.MaxPlayersPerRoom,
-			"player_count":           playerCount,
-			"plan_name":              entsPlayer.PlanName,
 		})
 		return
 	}
@@ -2660,11 +2706,12 @@ func GetPlayerQuestion(c *gin.Context) {
 		return
 	}
 
-	var questions []model.Question
-	if err := db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&questions).Error; err != nil {
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
 		return
 	}
+	questions := qset.list
 	if index >= len(questions) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
 		return

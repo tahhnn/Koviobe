@@ -590,6 +590,7 @@ func ImportBankQuestions(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit import"})
 		return
 	}
+	invalidateQuizQuestions(quiz.ID)
 
 	audit.Record(uid, "import_bank_questions", fmt.Sprintf("quiz_%d_from_template_%d_n%d", quiz.ID, template.ID, added), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{
