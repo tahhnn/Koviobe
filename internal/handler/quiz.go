@@ -1187,10 +1187,12 @@ func SubmitAnswer(c *gin.Context) {
 	// The player row is not read here: the transaction below locks and reads
 	// it anyway, and checks there that it belongs to the token's room. Reading
 	// it twice was one more round trip per answer for nothing.
-	var room model.Room
-	db.DB.First(&room, playerClaims.RoomID)
-
-	if room.Status != "active" {
+	//
+	// Nor is the room's status: the fixed fields come from room_cache.go and
+	// the transaction reads the status under its lock, which is the check that
+	// has always decided. A room that is not running is refused there.
+	room, err := submitRoomMeta(playerClaims.RoomID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
 		return
 	}
@@ -1201,12 +1203,7 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	// Parse ThemeConfig to check game mode
-	var config struct {
-		GameMode string `json:"game_mode"`
-	}
-	json.Unmarshal([]byte(room.ThemeConfig), &config)
-	isPlayerPaced := config.GameMode == "player_paced"
+	isPlayerPaced := room.PlayerPaced
 
 	qset, err := quizQuestions(room.QuizID)
 	if err != nil {
@@ -1287,7 +1284,13 @@ func SubmitAnswer(c *gin.Context) {
 			// blocking finalizeRoom's UPDATE until they have committed.
 			var lockedRoom model.Room
 			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("room_finished") // deleted since its fields were cached
+				}
 				return err
+			}
+			if lockedRoom.Status == "waiting" {
+				return fmt.Errorf("room_not_active")
 			}
 			if lockedRoom.Status != "active" {
 				return fmt.Errorf("room_finished")
@@ -1374,6 +1377,9 @@ func SubmitAnswer(c *gin.Context) {
 			// the lock is here, but submissions no longer block each other.
 			var lockedRoom model.Room
 			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("room_finished") // deleted since its fields were cached
+				}
 				return err
 			}
 			// finalizeRoom nulls current_question_id in the same update that flips
@@ -1381,6 +1387,9 @@ func SubmitAnswer(c *gin.Context) {
 			// outright anyway: the player gets ROOM_FINISHED and goes to the
 			// results screen, instead of "the question is not active" for a game
 			// that no longer exists.
+			if lockedRoom.Status == "waiting" {
+				return fmt.Errorf("room_not_active")
+			}
 			if lockedRoom.Status != "active" {
 				return fmt.Errorf("room_finished")
 			}
@@ -1448,6 +1457,8 @@ func SubmitAnswer(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Question is not currently active"})
 		case "time_exceeded":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Time limit exceeded for this question"})
+		case "room_not_active":
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
 		case "room_finished":
 			// Same sentinel and status the question fetch uses for a closed room,
 			// so the client takes the path it already has: straight to results.
