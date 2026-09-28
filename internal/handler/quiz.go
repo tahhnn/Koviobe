@@ -1163,6 +1163,14 @@ func evaluateAnswer(question model.Question, selected string) bool {
 // [C-3 FIX] Authentication now uses a signed player JWT (X-Player-Token header)
 // instead of the forged-able X-Player-ID plain integer header.
 func SubmitAnswer(c *gin.Context) {
+	// The moment the answer reached us, and the only clock the deadline and the
+	// speed bonus may read. Reading time.Now() inside the transaction instead
+	// charged each player for the wait before it: a burst queues thousands of
+	// submits behind a pool of DB_MAX_OPEN_CONNS connections, so two players
+	// who pressed at the same instant scored differently by their place in
+	// that queue, and near the deadline the later one was refused outright.
+	receivedAt := time.Now().UTC()
+
 	// Validate signed player token from header
 	playerTokenStr := c.GetHeader("X-Player-Token")
 	if playerTokenStr == "" {
@@ -1294,7 +1302,7 @@ func SubmitAnswer(c *gin.Context) {
 			// rewarded for it. Start the clock but award no speed component.
 			noRecordedStart := lockedPlayer.QuestionActiveUntil == nil
 			if noRecordedStart {
-				until := time.Now().Add(time.Duration(question.Duration) * time.Second)
+				until := receivedAt.Add(time.Duration(question.Duration) * time.Second)
 				lockedPlayer.QuestionActiveUntil = &until
 			}
 			// 2s grace for client/server clock skew. A late submit used to roll the
@@ -1303,13 +1311,13 @@ func SubmitAnswer(c *gin.Context) {
 			// time_exceeded again and the next-question fetch 403'd, so the player
 			// was permanently stuck. Instead, record the answer as a timed-out miss
 			// (0 points) and let the flow below advance them to the next question.
-			if time.Now().After(lockedPlayer.QuestionActiveUntil.Add(2 * time.Second)) {
+			if receivedAt.After(lockedPlayer.QuestionActiveUntil.Add(2 * time.Second)) {
 				timedOut = true
 				isCorrect = false
 			}
 
 			questionStartedAt := lockedPlayer.QuestionActiveUntil.Add(-time.Duration(question.Duration) * time.Second)
-			responseTimeMs = int(time.Since(questionStartedAt).Milliseconds())
+			responseTimeMs = int(receivedAt.Sub(questionStartedAt).Milliseconds())
 			if responseTimeMs < 0 {
 				responseTimeMs = 0
 			}
@@ -1380,15 +1388,15 @@ func SubmitAnswer(c *gin.Context) {
 				return fmt.Errorf("question_not_active")
 			}
 			// 2s grace for client/server clock skew
-			if lockedRoom.QuestionActiveUntil == nil || time.Now().UTC().After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
+			if lockedRoom.QuestionActiveUntil == nil || receivedAt.After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
 				return fmt.Errorf("time_exceeded")
 			}
 
 			activeSince := lockedRoom.QuestionActiveUntil.UTC().Add(-time.Duration(question.Duration) * time.Second)
-			responseTimeMs = int(time.Now().UTC().Sub(activeSince).Milliseconds())
+			responseTimeMs = int(receivedAt.Sub(activeSince).Milliseconds())
 
 			if isCorrect {
-				timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(time.Now().UTC())
+				timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(receivedAt)
 				totalDuration := time.Duration(question.Duration) * time.Second
 				ratio := float64(timeLeft) / float64(totalDuration)
 				if ratio < 0 {
