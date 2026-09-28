@@ -12,8 +12,8 @@
   "namespaces": [
     {
       "name": "rooms",
-      "presence": true,
-      "join_leave": true,
+      "presence": false,
+      "join_leave": false,
       "allow_subscribe_for_client": false
     }
   ],

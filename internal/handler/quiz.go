@@ -2614,6 +2614,17 @@ func GetRoomResults(c *gin.Context) {
 		return
 	}
 
+	// A finished room's results are encoded once (results_cache.go): the whole
+	// room asks in the same second the game ends.
+	if e := cachedResults(uint(roomID)); e != nil {
+		if hostID != 0 && e.hostID != hostID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
+			return
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", e.render(callerNickname))
+		return
+	}
+
 	var room model.Room
 	if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
@@ -2622,6 +2633,12 @@ func GetRoomResults(c *gin.Context) {
 	if hostID != 0 && room.HostID != hostID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
 		return
+	}
+	if room.Status == "finished" {
+		if e := buildResults(&room); e != nil {
+			c.Data(http.StatusOK, "application/json; charset=utf-8", e.render(callerNickname))
+			return
+		}
 	}
 
 	players := getRoomPlayers(room.ID, room.Status)
@@ -2905,32 +2922,41 @@ func GetRoomByPin(c *gin.Context) {
 	})
 }
 
+// archivedPlayers reads a finished room's final ranking from its
+// game_sessions archive, in archive order (score DESC). nil means the archive
+// is not there or not readable yet — see the window described in getRoomPlayers.
+func archivedPlayers(roomID uint) []model.Player {
+	var players []model.Player
+	var session model.GameSession
+	if db.DB.Where("room_id = ?", roomID).First(&session).Error == nil {
+		type Ranking struct {
+			Nickname       string `json:"nickname"`
+			Score          int    `json:"score"`
+			CorrectAnswers int    `json:"correct_answers"`
+		}
+		var rankings []Ranking
+		if json.Unmarshal([]byte(session.Rankings), &rankings) == nil {
+			players = make([]model.Player, len(rankings))
+			for i, r := range rankings {
+				players[i] = model.Player{
+					ID:             uint(i + 1),
+					RoomID:         roomID,
+					Nickname:       r.Nickname,
+					Score:          r.Score,
+					CorrectAnswers: r.CorrectAnswers,
+				}
+				// CurrentQuestionID is nil here, which the host screen reads as
+				// "done" — correct for an archived game.
+			}
+		}
+	}
+	return players
+}
+
 func getRoomPlayers(roomID uint, status string) []model.Player {
 	var players []model.Player
 	if status == "finished" {
-		var session model.GameSession
-		if db.DB.Where("room_id = ?", roomID).First(&session).Error == nil {
-			type Ranking struct {
-				Nickname       string `json:"nickname"`
-				Score          int    `json:"score"`
-				CorrectAnswers int    `json:"correct_answers"`
-			}
-			var rankings []Ranking
-			if json.Unmarshal([]byte(session.Rankings), &rankings) == nil {
-				players = make([]model.Player, len(rankings))
-				for i, r := range rankings {
-					players[i] = model.Player{
-						ID:             uint(i + 1),
-						RoomID:         roomID,
-						Nickname:       r.Nickname,
-						Score:          r.Score,
-						CorrectAnswers: r.CorrectAnswers,
-					}
-					// CurrentQuestionID is nil here, which the host screen reads as
-					// "done" — correct for an archived game.
-				}
-			}
-		}
+		players = archivedPlayers(roomID)
 		if len(players) > 0 {
 			return players
 		}
