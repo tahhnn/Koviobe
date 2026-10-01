@@ -11,7 +11,7 @@ import (
 
 // legacyResults is the body GetRoomResults built before the cache, kept here
 // so the cached bytes can be compared against it.
-func legacyResults(room *model.Room, players []model.Player, callerNickname string) []byte {
+func legacyResults(room *model.Room, players []model.Player, stats json.RawMessage, callerNickname string) []byte {
 	sort.SliceStable(players, func(i, j int) bool { return players[i].Score > players[j].Score })
 	standings := make([]gin.H, 0, len(players))
 	for i, p := range players {
@@ -25,11 +25,12 @@ func legacyResults(room *model.Room, players []model.Player, callerNickname stri
 		})
 	}
 	b, _ := json.Marshal(gin.H{
-		"room_id":      room.ID,
-		"status":       room.Status,
-		"players":      standings,
-		"ended_reason": room.EndedReason,
-		"theme_config": room.ThemeConfig,
+		"room_id":        room.ID,
+		"status":         room.Status,
+		"players":        standings,
+		"ended_reason":   room.EndedReason,
+		"theme_config":   room.ThemeConfig,
+		"question_stats": stats,
 	})
 	return b
 }
@@ -50,14 +51,42 @@ func sampleResults() (*model.Room, []model.Player) {
 	return room, players
 }
 
+// sampleStats is stored the way archiveGameLogs stores it: json.Marshal output.
+func sampleStats() json.RawMessage {
+	b, _ := json.Marshal([]questionStat{
+		{Order: 1, Content: "2 < 3 & \"x\"?", Type: "multiple_choice", CorrectAnswer: "A", CorrectText: "Đúng", Answered: 4, Correct: 3, TotalPlayers: 5},
+		{Order: 2, Content: "Bình chọn", Type: "poll", CorrectAnswer: "A", Answered: 2, TotalPlayers: 5},
+	})
+	return b
+}
+
 func TestCachedResultsMatchTheLegacyResponseByteForByte(t *testing.T) {
-	for _, caller := range []string{"", "alice", "bob <b>", "chị Hà", "dup", "nobody"} {
+	for _, stats := range []json.RawMessage{sampleStats(), json.RawMessage("[]")} {
+		for _, caller := range []string{"", "alice", "bob <b>", "chị Hà", "dup", "nobody"} {
+			room, players := sampleResults()
+			want := legacyResults(room, append([]model.Player(nil), players...), stats, caller)
+			e := &resultsEntry{}
+			e.fill(room, append([]model.Player(nil), players...), stats)
+			if got := e.render(caller); string(got) != string(want) {
+				t.Fatalf("caller %q:\n got  %s\n want %s", caller, got, want)
+			}
+		}
+	}
+}
+
+func TestCachedResultsServeEmptyStatsForALegacyArchive(t *testing.T) {
+	for _, stored := range []string{"", "null", "{}", "[broken"} {
 		room, players := sampleResults()
-		want := legacyResults(room, append([]model.Player(nil), players...), caller)
 		e := &resultsEntry{}
-		e.fill(room, append([]model.Player(nil), players...))
-		if got := e.render(caller); string(got) != string(want) {
-			t.Fatalf("caller %q:\n got  %s\n want %s", caller, got, want)
+		e.fill(room, players, json.RawMessage(stored))
+		var out struct {
+			QuestionStats []questionStat `json:"question_stats"`
+		}
+		if err := json.Unmarshal(e.render(""), &out); err != nil {
+			t.Fatalf("stored %q: invalid response: %v", stored, err)
+		}
+		if out.QuestionStats == nil || len(out.QuestionStats) != 0 {
+			t.Fatalf("stored %q: want [], got %#v", stored, out.QuestionStats)
 		}
 	}
 }
@@ -65,7 +94,7 @@ func TestCachedResultsMatchTheLegacyResponseByteForByte(t *testing.T) {
 func TestCachedResultsRenderDoesNotLeakTheYouFlagBetweenCallers(t *testing.T) {
 	room, players := sampleResults()
 	e := &resultsEntry{}
-	e.fill(room, players)
+	e.fill(room, players, sampleStats())
 	_ = e.render("alice")
 	var out struct {
 		Players []struct {

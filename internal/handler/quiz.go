@@ -2079,7 +2079,7 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 
 	// Archive to game_sessions (permanent record). If this fails the transient
 	// rows below are the only remaining copy, so the cleanup is skipped.
-	archiveErr := archiveGameLogs(room, rankings)
+	archiveErr := archiveGameLogs(room, rankings, collectQuestionStats(room, len(players)))
 	if archiveErr != nil {
 		log.Printf("[finalizeRoom] archive failed for room %d, keeping players and answer logs: %v", room.ID, archiveErr)
 		notify.P1("finalize_archive_failed", "Archive khi kết thúc phòng thất bại (room=%d): %v — kết quả trận đấu có nguy cơ mất.", room.ID, archiveErr)
@@ -2133,10 +2133,15 @@ func archivedRankings(roomID uint) []finalRanking {
 	return rankings
 }
 
-func archiveGameLogs(room model.Room, rankings interface{}) error {
+func archiveGameLogs(room model.Room, rankings interface{}, questionStats []questionStat) error {
 	rankingsJSON, err := json.Marshal(rankings)
 	if err != nil {
 		return fmt.Errorf("marshal rankings for room %d: %w", room.ID, err)
+	}
+	// Never fails the archive: nil stats just store '' and the tab shows empty.
+	var statsJSON []byte
+	if questionStats != nil {
+		statsJSON, _ = json.Marshal(questionStats)
 	}
 
 	// Count actual players in the room
@@ -2144,12 +2149,13 @@ func archiveGameLogs(room model.Room, rankings interface{}) error {
 	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
 
 	session := model.GameSession{
-		RoomID:      room.ID,
-		HostID:      room.HostID,
-		QuizID:      room.QuizID,
-		Rankings:    string(rankingsJSON),
-		PlayerCount: int(playerCount),
-		EndedAt:     time.Now(),
+		RoomID:        room.ID,
+		HostID:        room.HostID,
+		QuizID:        room.QuizID,
+		Rankings:      string(rankingsJSON),
+		QuestionStats: string(statsJSON),
+		PlayerCount:   int(playerCount),
+		EndedAt:       time.Now(),
 	}
 
 	if err := db.DB.Create(&session).Error; err != nil {
@@ -2673,6 +2679,9 @@ func GetRoomResults(c *gin.Context) {
 		// event's key visual is most worth keeping, and it was the only game
 		// screen still falling back to the plain gradient.
 		"theme_config": room.ThemeConfig,
+		// Per-question correct rate. Only a finished room has it (it is
+		// captured at finalize); a room still running gets [].
+		"question_stats": liveQuestionStats(room),
 	})
 }
 

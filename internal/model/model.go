@@ -160,6 +160,10 @@ type GameSession struct {
 	HostID      uint      `gorm:"index;not null" json:"host_id"`
 	QuizID      uint      `gorm:"index;not null" json:"quiz_id"`
 	Rankings    string    `gorm:"type:text;not null" json:"rankings"` // JSON array of {nickname, score}
+	// QuestionStats is how the room did on each question (JSON array, see
+	// handler/question_stats.go). Captured at finalize because answer_logs are
+	// deleted right after. '' on rooms archived before the column existed.
+	QuestionStats string `gorm:"type:text;not null;default:''" json:"question_stats"`
 	PlayerCount int       `gorm:"default:0" json:"player_count"`
 	EndedAt     time.Time `json:"ended_at"`
 	CreatedAt   time.Time `json:"created_at"`

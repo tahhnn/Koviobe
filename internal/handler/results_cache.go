@@ -33,7 +33,7 @@ type resultsEntry struct {
 	built  bool
 	hostID uint
 	head   []byte   // `{"ended_reason":…,"players":[`
-	tail   []byte   // `],"room_id":…,"status":…,"theme_config":…}`
+	tail   []byte   // `],"question_stats":…,"room_id":…,"status":…,"theme_config":…}`
 	rows   [][]byte // each row with "you":false
 	youRow [][]byte // the same row with "you":true
 	byNick map[string][]int
@@ -88,14 +88,15 @@ func buildResults(room *model.Room) *resultsEntry {
 		resultsCache.Delete(room.ID)
 		return nil
 	}
-	e.fill(room, players)
+	e.fill(room, players, archivedQuestionStats(room.ID))
 	e.built, e.used = true, time.Now()
 	sweepResultsCache(room.ID)
 	return e
 }
 
-// fill encodes a room and its ranked players into the entry.
-func (e *resultsEntry) fill(room *model.Room, players []model.Player) {
+// fill encodes a room, its ranked players and its per-question stats (already
+// JSON, as archived) into the entry.
+func (e *resultsEntry) fill(room *model.Room, players []model.Player, questionStats json.RawMessage) {
 	sort.SliceStable(players, func(i, j int) bool {
 		return players[i].Score > players[j].Score
 	})
@@ -116,7 +117,8 @@ func (e *resultsEntry) fill(room *model.Room, players []model.Player) {
 	status, _ := json.Marshal(room.Status)
 	theme, _ := json.Marshal(room.ThemeConfig)
 	e.head = append(append([]byte(`{"ended_reason":`), endedReason...), []byte(`,"players":[`)...)
-	e.tail = bytes.Join([][]byte{[]byte(`],"room_id":`), roomID, []byte(`,"status":`), status,
+	e.tail = bytes.Join([][]byte{[]byte(`],"question_stats":`), questionStatsJSON(string(questionStats)),
+		[]byte(`,"room_id":`), roomID, []byte(`,"status":`), status,
 		[]byte(`,"theme_config":`), theme, []byte(`}`)}, nil)
 	e.hostID = room.HostID
 }
