@@ -166,14 +166,16 @@ func cleanupAbandonedRooms() {
 		var players []model.Player
 		db.DB.Where("room_id = ?", room.ID).Find(&players)
 
+		// One grouped count for the room, not one query per player — same
+		// helper the host-initiated close uses.
+		correctByPlayer := handler.CorrectAnswerCounts(room.ID)
+
 		var rankings []Ranking
 		for _, p := range players {
-			var correctCount int64
-			db.DB.Model(&model.AnswerLog{}).Where("player_id = ? AND is_correct = ?", p.ID, true).Count(&correctCount)
 			rankings = append(rankings, Ranking{
 				Nickname:       p.Nickname,
 				Score:          p.Score,
-				CorrectAnswers: int(correctCount),
+				CorrectAnswers: int(correctByPlayer[p.ID]),
 			})
 		}
 		sort.Slice(rankings, func(i, j int) bool {

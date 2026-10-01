@@ -191,8 +191,14 @@ func main() {
 			{
 				quizzes.POST("", middleware.RequirePermission("quiz:create"), handler.CreateQuiz)
 				quizzes.GET("", middleware.RequirePermission("quiz:read"), handler.ListQuizzes)
+				// Registered before /:id so "shared" is not captured as an id.
+				quizzes.GET("/shared", middleware.RequirePermission("quiz:read"), handler.ListSharedQuizzes)
 				quizzes.GET("/:id", middleware.RequirePermission("quiz:read"), handler.GetQuiz)
 				quizzes.PUT("/:id", middleware.RequirePermission("quiz:update"), handler.UpdateQuiz)
+				// Publishing is the owner's decision, so this deliberately sits
+				// behind quiz:update but checks host_id itself — edit rights on a
+				// shared quiz never reach it.
+				quizzes.PATCH("/:id/sharing", middleware.RequirePermission("quiz:update"), handler.UpdateQuizSharing)
 				quizzes.DELETE("/:id", middleware.RequirePermission("quiz:delete"), handler.DeleteQuiz)
 			}
 

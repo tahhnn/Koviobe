@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -21,6 +22,7 @@ import (
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"github.com/quizzzone/backend/internal/pkg/notify"
+	"github.com/quizzzone/backend/internal/pkg/theme"
 	"github.com/quizzzone/backend/internal/realtime"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -31,6 +33,80 @@ type CreateQuizReq struct {
 	Description string        `json:"description"`
 	ThemeConfig string        `json:"theme_config"` // Receives custom theme settings
 	Questions   []QuestionReq `json:"questions"`
+}
+
+// UpdateQuizReq is the body of PUT /quizzes/:id.
+//
+// It carries no sharing flags: is_public and allow_edit belong to the owner and
+// are only writable through PATCH /quizzes/:id/sharing, or anyone holding edit
+// rights on a public quiz could change who else may edit it.
+type UpdateQuizReq struct {
+	CreateQuizReq
+	// ExpectedUpdatedAt is quizzes.updated_at as the editor loaded it. When
+	// present the write only lands if the row has not moved since, which is
+	// what stops two people editing a public quiz from overwriting each other.
+	// Optional so an older client keeps working — it just keeps the old
+	// last-write-wins behaviour.
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at"`
+}
+
+// vetThemeConfig sanitizes a submitted theme and applies the plan gates,
+// returning the JSON to store.
+//
+// Both CreateQuiz and UpdateQuiz call it. They used to differ: create checked
+// the plan, update assigned req.ThemeConfig straight onto the row, so a host
+// blocked from branding on POST got it by sending the same body as a PUT. One
+// function is the only way those two stay in step.
+//
+// On a rejection it writes the response and returns false; the caller returns
+// without touching the database.
+// enforcing is passed in rather than read from license.Enforcing() inside, so
+// the gates can be tested without reaching for package state a test in another
+// package cannot set.
+func vetThemeConfig(c *gin.Context, ents license.Entitlements, enforcing bool, raw string) (string, bool) {
+	// Sanitize first. The gates below ask what the theme sets, and they should
+	// be asking about the values that would actually be stored — an off-site
+	// bg_host_url is dropped here, so it must not then trip the branding gate
+	// and tell the host to upgrade for something they are not getting.
+	clean, err := theme.Sanitize(raw)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid theme_config"})
+		return "", false
+	}
+
+	if !enforcing {
+		return clean, true
+	}
+
+	if theme.RequestsPlayerPaced(clean) && !ents.AllowPlayerPaced {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Player-paced mode requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_player_paced",
+		})
+		return "", false
+	}
+
+	if keys := theme.BrandingKeys(clean); len(keys) > 0 && !ents.AllowCustomBranding {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Custom branding requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_custom_branding",
+			"fields":  keys,
+		})
+		return "", false
+	}
+
+	if theme.WantsRemoveWatermark(clean) && !ents.AllowRemoveWatermark {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error":   "Removing watermark requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_remove_watermark",
+		})
+		return "", false
+	}
+
+	return clean, true
 }
 
 type QuestionReq struct {
@@ -103,34 +179,9 @@ func CreateQuiz(c *gin.Context) {
 		return
 	}
 
-	if license.Enforcing() && license.ThemeRequestsPlayerPaced(req.ThemeConfig) && !ents.AllowPlayerPaced {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error":   "Player-paced mode requires Pro plan",
-			"plan_id": ents.PlanID,
-			"feature": "allow_player_paced",
-		})
+	themeConfig, themeOK := vetThemeConfig(c, ents, license.Enforcing(), req.ThemeConfig)
+	if !themeOK {
 		return
-	}
-
-	if license.Enforcing() && !ents.AllowCustomBranding && req.ThemeConfig != "" && req.ThemeConfig != "{}" {
-		// Free may still store basic theme; only block advanced branding keys if present
-		var theme map[string]interface{}
-		if json.Unmarshal([]byte(req.ThemeConfig), &theme) == nil {
-			if _, ok := theme["logo_url"]; ok && !ents.AllowCustomBranding {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "Custom branding (logo) requires Pro plan",
-					"feature": "allow_custom_branding",
-				})
-				return
-			}
-			if _, ok := theme["remove_watermark"]; ok && !ents.AllowRemoveWatermark {
-				c.JSON(http.StatusForbidden, gin.H{
-					"error":   "Removing watermark requires Pro plan",
-					"feature": "allow_remove_watermark",
-				})
-				return
-			}
-		}
 	}
 
 	tx := db.DB.Begin()
@@ -139,7 +190,7 @@ func CreateQuiz(c *gin.Context) {
 		HostID:      userID.(uint),
 		Title:       req.Title,
 		Description: req.Description,
-		ThemeConfig: req.ThemeConfig,
+		ThemeConfig: themeConfig,
 	}
 
 	if err := tx.Create(&quiz).Error; err != nil {
@@ -215,6 +266,10 @@ func ListQuizzes(c *gin.Context) {
 		CreatedAt     time.Time `json:"created_at"`
 		UpdatedAt     time.Time `json:"updated_at"`
 		QuestionCount int64     `json:"question_count"`
+		// So the owner's own list can show which of their quizzes are shared
+		// without a second round trip per card.
+		IsPublic  bool `json:"is_public"`
+		AllowEdit bool `json:"allow_edit"`
 	}
 
 	var quizzes []model.Quiz
@@ -256,6 +311,8 @@ func ListQuizzes(c *gin.Context) {
 			CreatedAt:     q.CreatedAt,
 			UpdatedAt:     q.UpdatedAt,
 			QuestionCount: counts[q.ID],
+			IsPublic:      q.IsPublic,
+			AllowEdit:     q.AllowEdit,
 		})
 	}
 
@@ -271,15 +328,49 @@ func GetQuiz(c *gin.Context) {
 		return
 	}
 
+	// Loaded without the owner filter so a shared quiz resolves; rightsOn then
+	// decides. The response carries the correct answers and the explanation
+	// slides, which is exactly what publishing a quiz gives away — the warning
+	// belongs on the share toggle in the UI, not here.
 	var quiz model.Quiz
 	if err := db.DB.Preload("Questions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("questions.order ASC, questions.id ASC")
-	}).Where("id = ? AND host_id = ?", uint(id), userID.(uint)).First(&quiz).Error; err != nil {
+	}).Where("id = ?", uint(id)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
 
-	c.JSON(http.StatusOK, quiz)
+	rights := rightsOn(&quiz, userID.(uint))
+	if !rights.View {
+		denyQuizAccess(c, rights)
+		return
+	}
+
+	// Always a JSON array, never null: the model tag omits an empty list, and a
+	// hand-built map would send null instead.
+	questions := quiz.Questions
+	if questions == nil {
+		questions = []model.Question{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":           quiz.ID,
+		"host_id":      quiz.HostID,
+		"title":        quiz.Title,
+		"description":  quiz.Description,
+		"theme_config": quiz.ThemeConfig,
+		"is_public":    quiz.IsPublic,
+		"allow_edit":   quiz.AllowEdit,
+		"questions":    questions,
+		"created_at":   quiz.CreatedAt,
+		"updated_at":   quiz.UpdatedAt,
+		// What this caller may do, so the editor does not have to re-derive the
+		// rule client-side and get it wrong.
+		"is_owner": rights.Owner,
+		"can_edit": rights.Edit,
+		"can_host": rights.Host,
+		"can_copy": rights.Copy,
+	})
 }
 
 // Room & Game Control Handlers
@@ -327,10 +418,16 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
-	// Verify quiz exists and belongs to host
+	// Verify the quiz exists and that this host may run it: their own, or one
+	// its owner published. The room still records uid as HostID, so the room,
+	// its players and its logs belong to whoever opened it, not to the author.
 	var quiz model.Quiz
-	if err := db.DB.Preload("Questions").Where("id = ? AND host_id = ?", uint(quizID), uid).First(&quiz).Error; err != nil {
+	if err := db.DB.Preload("Questions").Where("id = ?", uint(quizID)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
+		return
+	}
+	if rights := rightsOn(&quiz, uid); !rights.Host {
+		denyQuizAccess(c, rights)
 		return
 	}
 
@@ -348,11 +445,32 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
-	if license.Enforcing() && license.ThemeRequestsPlayerPaced(quiz.ThemeConfig) && !ents.AllowPlayerPaced {
+	// The mode this room will run. Taken from the request, falling back to
+	// whatever the quiz was last saved with so an older client that sends
+	// nothing keeps behaving exactly as before.
+	gameMode := ""
+	if raw := c.Query("game_mode"); raw != "" {
+		gameMode = normalizeGameMode(raw)
+	} else if license.ThemeRequestsPlayerPaced(quiz.ThemeConfig) {
+		gameMode = "player_paced"
+	} else {
+		gameMode = "host_paced"
+	}
+
+	// Gated on the mode this room will actually run, not on the quiz's stored
+	// one: the host picks the mode per game now, so the quiz's saved value is
+	// no longer what they are asking for.
+	if license.Enforcing() && gameMode == "player_paced" && !ents.AllowPlayerPaced {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":   "This quiz uses player-paced mode which requires Pro plan",
 			"feature": "allow_player_paced",
 		})
+		return
+	}
+
+	roomTheme, err := withGameMode(quiz.ThemeConfig, gameMode)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare room settings"})
 		return
 	}
 
@@ -405,7 +523,7 @@ func CreateRoom(c *gin.Context) {
 		HostID:               uid,
 		Status:               "waiting",
 		IsPrivate:            isPrivate,
-		ThemeConfig:          quiz.ThemeConfig, // Inherit theme config directly from Quiz
+		ThemeConfig:          roomTheme, // Quiz's theme, with this game's mode applied
 		CurrentQuestionIndex: -1,
 	}
 
@@ -557,9 +675,19 @@ func JoinRoom(c *gin.Context) {
 	// burst — exactly the case a full room attracts.
 	roomFull := false
 	roomStarted := false
+	// The exclusive lock is only needed to make count-then-insert atomic, and
+	// the count only matters when the cap is enforced. With enforcement off it
+	// serialised every join in the room to protect a branch that never fires.
+	// The status re-check below still needs the room held still, but SHARE does
+	// that: it blocks StartGame's update until this transaction commits while
+	// letting other joiners hold the same lock at the same time.
+	lockStrength := "SHARE"
+	if license.Enforcing() {
+		lockStrength = "UPDATE"
+	}
 	txErr := db.DB.Transaction(func(tx *gorm.DB) error {
 		var lockedRoom model.Room
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: lockStrength}).First(&lockedRoom, room.ID).Error; err != nil {
 			return err
 		}
 
@@ -574,13 +702,17 @@ func JoinRoom(c *gin.Context) {
 			return fmt.Errorf("room_started")
 		}
 
-		var playerCount int64
-		if err := tx.Model(&model.Player{}).Where("room_id = ?", lockedRoom.ID).Count(&playerCount).Error; err != nil {
-			return err
-		}
-		if license.Enforcing() && int(playerCount) >= maxPlayers {
-			roomFull = true
-			return fmt.Errorf("room_full")
+		// Only counted when the answer can change the outcome. Outside
+		// enforcement this was a full count of the room on every single join.
+		if license.Enforcing() {
+			var playerCount int64
+			if err := tx.Model(&model.Player{}).Where("room_id = ?", lockedRoom.ID).Count(&playerCount).Error; err != nil {
+				return err
+			}
+			if int(playerCount) >= maxPlayers {
+				roomFull = true
+				return fmt.Errorf("room_full")
+			}
 		}
 
 		return tx.Create(&player).Error
@@ -994,11 +1126,7 @@ func sanitizePlayerOptions(raw string) interface{} {
 }
 
 func roomGameMode(themeConfig string) string {
-	var cfg struct {
-		GameMode string `json:"game_mode"`
-	}
-	_ = json.Unmarshal([]byte(themeConfig), &cfg)
-	return cfg.GameMode
+	return theme.Parse(themeConfig).GameMode
 }
 
 // evaluateAnswer scores a submission. pin_answer uses % distance tolerance (default 8%).
@@ -1035,6 +1163,14 @@ func evaluateAnswer(question model.Question, selected string) bool {
 // [C-3 FIX] Authentication now uses a signed player JWT (X-Player-Token header)
 // instead of the forged-able X-Player-ID plain integer header.
 func SubmitAnswer(c *gin.Context) {
+	// The moment the answer reached us, and the only clock the deadline and the
+	// speed bonus may read. Reading time.Now() inside the transaction instead
+	// charged each player for the wait before it: a burst queues thousands of
+	// submits behind a pool of DB_MAX_OPEN_CONNS connections, so two players
+	// who pressed at the same instant scored differently by their place in
+	// that queue, and near the deadline the later one was refused outright.
+	receivedAt := time.Now().UTC()
+
 	// Validate signed player token from header
 	playerTokenStr := c.GetHeader("X-Player-Token")
 	if playerTokenStr == "" {
@@ -1048,22 +1184,15 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	var player model.Player
-	if err := db.DB.First(&player, playerClaims.PlayerID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
-		return
-	}
-
-	// Extra check: ensure token's room matches the player's actual room
-	if player.RoomID != playerClaims.RoomID {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
-		return
-	}
-
-	var room model.Room
-	db.DB.First(&room, player.RoomID)
-
-	if room.Status != "active" {
+	// The player row is not read here: the transaction below locks and reads
+	// it anyway, and checks there that it belongs to the token's room. Reading
+	// it twice was one more round trip per answer for nothing.
+	//
+	// Nor is the room's status: the fixed fields come from room_cache.go and
+	// the transaction reads the status under its lock, which is the check that
+	// has always decided. A room that is not running is refused there.
+	room, err := submitRoomMeta(playerClaims.RoomID)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
 		return
 	}
@@ -1074,17 +1203,21 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	// Parse ThemeConfig to check game mode
-	var config struct {
-		GameMode string `json:"game_mode"`
-	}
-	json.Unmarshal([]byte(room.ThemeConfig), &config)
-	isPlayerPaced := config.GameMode == "player_paced"
+	isPlayerPaced := room.PlayerPaced
 
-	var question model.Question
-	if err := db.DB.First(&question, req.QuestionID).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
 		return
+	}
+	question, _, inQuiz := qset.byID(req.QuestionID)
+	if !inQuiz {
+		// Off the hot path: only a bad or foreign id gets here, and the DB read
+		// keeps the two error messages distinct as they always were.
+		if err := db.DB.First(&question, req.QuestionID).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
+			return
+		}
 	}
 
 	// Security check: ensure question belongs to room's quiz
@@ -1093,31 +1226,48 @@ func SubmitAnswer(c *gin.Context) {
 		return
 	}
 
-	var existingLog model.AnswerLog
-	existingErr := db.DB.Where("player_id = ? AND question_id = ?", player.ID, req.QuestionID).First(&existingLog).Error
-	if existingErr == nil {
+	// Repeat check, from Redis (answer_claim.go). The unique index on
+	// answer_logs stays the real guarantee; this only spares the database the
+	// lookup. With Redis unavailable, fall back to asking the database — Take,
+	// not First, so the lookup rides the unique index instead of an ORDER BY.
+	claimed, redisOK := claimAnswer(c.Request.Context(), playerClaims.PlayerID, req.QuestionID)
+	if redisOK && !claimed {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
 		return
+	}
+	if !redisOK {
+		var existingLog model.AnswerLog
+		if db.DB.Where("player_id = ? AND question_id = ?", playerClaims.PlayerID, req.QuestionID).
+			Take(&existingLog).Error == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
+			return
+		}
 	}
 
 	isCorrect := evaluateAnswer(question, req.SelectedOption)
 	pointsEarned := 0
 	var responseTimeMs int
-	finalScore := player.Score
+	finalScore := 0
 	timedOut := false
 	playerFinished := false
+	var player model.Player
 
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
 		// Lock player row to prevent concurrent double-submit
 		var lockedPlayer model.Player
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, player.ID).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, playerClaims.PlayerID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("player_not_found")
+			}
 			return err
 		}
-
-		var dup model.AnswerLog
-		if err := tx.Where("player_id = ? AND question_id = ?", lockedPlayer.ID, req.QuestionID).First(&dup).Error; err == nil {
-			return fmt.Errorf("already_answered")
+		// Extra check: ensure token's room matches the player's actual room
+		if lockedPlayer.RoomID != playerClaims.RoomID {
+			return fmt.Errorf("token_room_mismatch")
 		}
+		player = lockedPlayer
+		// No repeat SELECT here any more: the claim above filtered the ordinary
+		// case, and the INSERT below hits idx_player_question for the rest.
 
 		if isPlayerPaced {
 			// The status read before this transaction is not a guarantee: a submit
@@ -1134,7 +1284,13 @@ func SubmitAnswer(c *gin.Context) {
 			// blocking finalizeRoom's UPDATE until they have committed.
 			var lockedRoom model.Room
 			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("room_finished") // deleted since its fields were cached
+				}
 				return err
+			}
+			if lockedRoom.Status == "waiting" {
+				return fmt.Errorf("room_not_active")
 			}
 			if lockedRoom.Status != "active" {
 				return fmt.Errorf("room_finished")
@@ -1149,7 +1305,7 @@ func SubmitAnswer(c *gin.Context) {
 			// rewarded for it. Start the clock but award no speed component.
 			noRecordedStart := lockedPlayer.QuestionActiveUntil == nil
 			if noRecordedStart {
-				until := time.Now().Add(time.Duration(question.Duration) * time.Second)
+				until := receivedAt.Add(time.Duration(question.Duration) * time.Second)
 				lockedPlayer.QuestionActiveUntil = &until
 			}
 			// 2s grace for client/server clock skew. A late submit used to roll the
@@ -1158,13 +1314,13 @@ func SubmitAnswer(c *gin.Context) {
 			// time_exceeded again and the next-question fetch 403'd, so the player
 			// was permanently stuck. Instead, record the answer as a timed-out miss
 			// (0 points) and let the flow below advance them to the next question.
-			if time.Now().After(lockedPlayer.QuestionActiveUntil.Add(2 * time.Second)) {
+			if receivedAt.After(lockedPlayer.QuestionActiveUntil.Add(2 * time.Second)) {
 				timedOut = true
 				isCorrect = false
 			}
 
 			questionStartedAt := lockedPlayer.QuestionActiveUntil.Add(-time.Duration(question.Duration) * time.Second)
-			responseTimeMs = int(time.Since(questionStartedAt).Milliseconds())
+			responseTimeMs = int(receivedAt.Sub(questionStartedAt).Milliseconds())
 			if responseTimeMs < 0 {
 				responseTimeMs = 0
 			}
@@ -1190,17 +1346,10 @@ func SubmitAnswer(c *gin.Context) {
 				lockedPlayer.Score += pointsEarned
 			}
 
-			var questions []model.Question
-			if err := tx.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&questions).Error; err != nil {
-				return err
-			}
-
+			questions := qset.list
 			nextIdx := -1
-			for idx, q := range questions {
-				if q.ID == req.QuestionID {
-					nextIdx = idx + 1
-					break
-				}
+			if _, at, ok := qset.byID(req.QuestionID); ok {
+				nextIdx = at + 1
 			}
 			if nextIdx > 0 && nextIdx < len(questions) {
 				nextQ := questions[nextIdx]
@@ -1217,8 +1366,20 @@ func SubmitAnswer(c *gin.Context) {
 			}
 			finalScore = lockedPlayer.Score
 		} else {
+			// SHARE, not UPDATE: this branch only reads the room — its status,
+			// its current question and its deadline — and never writes the row.
+			// An exclusive lock here put every answer in the room behind the
+			// same row: measured 2026-09-23 under a 2000-player burst at 24.7ms
+			// average for this one statement and 97% of all database time, with
+			// zero disk reads, so it was queueing rather than working. SHARE
+			// still blocks NextQuestion and finalizeRoom from moving the room
+			// out from under a submission in flight, which is the whole reason
+			// the lock is here, but submissions no longer block each other.
 			var lockedRoom model.Room
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedRoom, room.ID).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("room_finished") // deleted since its fields were cached
+				}
 				return err
 			}
 			// finalizeRoom nulls current_question_id in the same update that flips
@@ -1226,6 +1387,9 @@ func SubmitAnswer(c *gin.Context) {
 			// outright anyway: the player gets ROOM_FINISHED and goes to the
 			// results screen, instead of "the question is not active" for a game
 			// that no longer exists.
+			if lockedRoom.Status == "waiting" {
+				return fmt.Errorf("room_not_active")
+			}
 			if lockedRoom.Status != "active" {
 				return fmt.Errorf("room_finished")
 			}
@@ -1233,15 +1397,15 @@ func SubmitAnswer(c *gin.Context) {
 				return fmt.Errorf("question_not_active")
 			}
 			// 2s grace for client/server clock skew
-			if lockedRoom.QuestionActiveUntil == nil || time.Now().UTC().After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
+			if lockedRoom.QuestionActiveUntil == nil || receivedAt.After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
 				return fmt.Errorf("time_exceeded")
 			}
 
 			activeSince := lockedRoom.QuestionActiveUntil.UTC().Add(-time.Duration(question.Duration) * time.Second)
-			responseTimeMs = int(time.Now().UTC().Sub(activeSince).Milliseconds())
+			responseTimeMs = int(receivedAt.Sub(activeSince).Milliseconds())
 
 			if isCorrect {
-				timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(time.Now().UTC())
+				timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(receivedAt)
 				totalDuration := time.Duration(question.Duration) * time.Second
 				ratio := float64(timeLeft) / float64(totalDuration)
 				if ratio < 0 {
@@ -1277,13 +1441,24 @@ func SubmitAnswer(c *gin.Context) {
 	})
 
 	if err != nil {
+		// Nothing was recorded, so the claim must not stand — except for a
+		// repeat, where the claim is exactly right.
+		if claimed && err.Error() != "already_answered" {
+			releaseAnswer(playerClaims.PlayerID, req.QuestionID)
+		}
 		switch err.Error() {
+		case "player_not_found":
+			c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
+		case "token_room_mismatch":
+			c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
 		case "already_answered":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
 		case "question_not_active":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Question is not currently active"})
 		case "time_exceeded":
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Time limit exceeded for this question"})
+		case "room_not_active":
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
 		case "room_finished":
 			// Same sentinel and status the question fetch uses for a closed room,
 			// so the client takes the path it already has: straight to results.
@@ -1581,35 +1756,37 @@ func roomStandings(room *model.Room, callerNickname string) ([]StandingRow, *Sta
 		return top, me, len(players)
 	}
 
+	// Live room: everyone else's rows come from a snapshot shared by the room
+	// for a second (standings_cache.go). A failed read degrades to an empty
+	// board, as the per-request queries it replaces did.
+	rows, _ := roomSnapshot(room.ID)
 	top := make([]StandingRow, 0, leaderboardTopN)
-	db.DB.Model(&model.Player{}).
-		Select("id, nickname, score").
-		Where("room_id = ?", room.ID).
-		Order("score DESC, id ASC").
-		Limit(leaderboardTopN).
-		Scan(&top)
-	for i := range top {
-		top[i].Rank = i + 1
+	for i := 0; i < len(rows) && i < leaderboardTopN; i++ {
+		top = append(top, rows[i])
 	}
 
-	var total int64
-	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&total)
-
+	// The caller's own row is read live, never from the snapshot: in solo mode
+	// a player opens the board right after their own answer lands, and showing
+	// them the score from before it would read as a lost answer. One indexed
+	// lookup; the rank is placed against the snapshot rather than counted.
 	var me *StandingRow
 	if callerNickname != "" {
 		var self model.Player
-		if err := db.DB.Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
-			// A COUNT of the players ahead, not a scan of the roster: every
-			// player in the room asks for this after every question, so the cost
-			// has to stay flat as the room grows.
-			var ahead int64
-			db.DB.Model(&model.Player{}).
-				Where("room_id = ? AND (score > ? OR (score = ? AND id < ?))", room.ID, self.Score, self.Score, self.ID).
-				Count(&ahead)
-			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score, Rank: int(ahead) + 1}
+		if err := db.DB.Select("id, nickname, score").
+			Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
+			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score,
+				Rank: rankAgainst(rows, self.Score, self.ID)}
+			// And the same score on their own line of the top list, so the slide
+			// never shows one player two different scores. top is this request's
+			// copy, not the shared snapshot.
+			for i := range top {
+				if top[i].ID == self.ID {
+					top[i].Score = self.Score
+				}
+			}
 		}
 	}
-	return top, me, int(total)
+	return top, me, len(rows)
 }
 
 // roomViewerAuth identifies the caller of a read-only room endpoint: a player
@@ -1793,6 +1970,33 @@ func FinalizeRoom(roomID uint) error {
 	return FinalizeRoomWithReason(roomID, EndReasonHost)
 }
 
+// CorrectAnswerCounts returns, for one room, how many correct answers each
+// player gave — in a single grouped query rather than one per player. Shared
+// with the cron that closes abandoned rooms, which had the same loop.
+// Served by idx_answer_logs_room_id.
+func CorrectAnswerCounts(roomID uint) map[uint]int64 {
+	type row struct {
+		PlayerID uint
+		N        int64
+	}
+	var rows []row
+	if err := db.DB.Model(&model.AnswerLog{}).
+		Select("player_id, count(*) AS n").
+		Where("room_id = ? AND is_correct = ?", roomID, true).
+		Group("player_id").
+		Scan(&rows).Error; err != nil {
+		// A missing count costs a zero in the rankings; losing the archive
+		// would cost the whole game, so this never aborts the close.
+		log.Printf("[CorrectAnswerCounts] room %d: %v", roomID, err)
+		return map[uint]int64{}
+	}
+	out := make(map[uint]int64, len(rows))
+	for _, r := range rows {
+		out[r.PlayerID] = r.N
+	}
+	return out
+}
+
 // Why a room closed. Protocol values, never prose: the client branches on them,
 // so they are deliberately absent from the i18n catalog — same discipline as the
 // NO_MORE_QUESTIONS / ROOM_FINISHED sentinels.
@@ -1858,13 +2062,15 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 	var players []model.Player
 	db.DB.Where("room_id = ?", room.ID).Find(&players)
 
+	// One grouped count for the whole room, not one query per player: a
+	// 2000-seat room used to close with 2000 round trips.
+	correctByPlayer := CorrectAnswerCounts(room.ID)
+
 	for _, p := range players {
-		var correctCount int64
-		db.DB.Model(&model.AnswerLog{}).Where("player_id = ? AND is_correct = ?", p.ID, true).Count(&correctCount)
 		rankings = append(rankings, finalRanking{
 			Nickname:       p.Nickname,
 			Score:          p.Score,
-			CorrectAnswers: int(correctCount),
+			CorrectAnswers: int(correctByPlayer[p.ID]),
 		})
 	}
 	sort.Slice(rankings, func(i, j int) bool {
@@ -1964,19 +2170,44 @@ func UpdateQuiz(c *gin.Context) {
 		return
 	}
 
-	var req CreateQuizReq
+	var req UpdateQuizReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	var quiz model.Quiz
-	if err := db.DB.Where("id = ? AND host_id = ?", uint(id), userID.(uint)).First(&quiz).Error; err != nil {
+	if err := db.DB.Where("id = ?", uint(id)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
+	if rights := rightsOn(&quiz, userID.(uint)); !rights.Edit {
+		denyQuizAccess(c, rights)
+		return
+	}
 
-	ents, err := license.GetEntitlements(userID.(uint))
+	// Every gameplay step reads the questions live, and the sync below deletes
+	// the ones missing from the payload — so an edit landing mid-game rewrites
+	// the question list under a room that is already running it. A shared quiz
+	// can be edited and hosted by different people at once, so the room at risk
+	// is very often not the editor's own and not on their screen. That is
+	// exactly why this check cannot be left to the UI.
+	live, err := quizHasActiveRoom(quiz.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check running rooms"})
+		return
+	}
+	if live {
+		c.JSON(http.StatusConflict, gin.H{"error": "Quiz is being played right now"})
+		return
+	}
+
+	// Entitlements come from the quiz owner, not the editor. The limits belong
+	// to whoever owns the resource: otherwise a Free editor saving a Pro host's
+	// 60-question quiz is rejected for a quota that is not theirs, and
+	// vetThemeConfig below would strip the owner's branding. For the owner
+	// editing their own quiz this is the same lookup as before.
+	ents, err := license.GetEntitlements(quiz.HostID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"})
 		return
@@ -1992,14 +2223,42 @@ func UpdateQuiz(c *gin.Context) {
 	tx := db.DB.Begin()
 
 	// Update quiz fields
-	quiz.Title = req.Title
-	quiz.Description = req.Description
-	quiz.ThemeConfig = req.ThemeConfig
-	if err := tx.Save(&quiz).Error; err != nil {
+	themeConfig, themeOK := vetThemeConfig(c, ents, license.Enforcing(), req.ThemeConfig)
+	if !themeOK {
+		tx.Rollback()
+		return
+	}
+
+	// Compare-and-swap on updated_at rather than Save: this handler replaces the
+	// whole question list, so two people editing the same quiz would otherwise
+	// silently overwrite each other. The check runs inside the UPDATE, because
+	// comparing in Go and then saving leaves a window between the two.
+	//
+	// The flags are absent from the map on purpose — is_public and allow_edit
+	// are the owner's, and are only writable through PATCH /quizzes/:id/sharing.
+	updates := map[string]interface{}{
+		"title":        req.Title,
+		"description":  req.Description,
+		"theme_config": themeConfig,
+	}
+	cas := tx.Model(&model.Quiz{}).Where("id = ?", quiz.ID)
+	if req.ExpectedUpdatedAt != nil {
+		cas = cas.Where("updated_at = ?", *req.ExpectedUpdatedAt)
+	}
+	res := cas.Updates(updates)
+	if res.Error != nil {
 		tx.Rollback()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update quiz"})
 		return
 	}
+	if res.RowsAffected == 0 {
+		tx.Rollback()
+		c.JSON(http.StatusConflict, gin.H{"error": "Quiz was changed by someone else"})
+		return
+	}
+	quiz.Title = req.Title
+	quiz.Description = req.Description
+	quiz.ThemeConfig = themeConfig
 
 	// Sync questions:
 	// 1. Get existing questions for this quiz
@@ -2104,6 +2363,7 @@ func UpdateQuiz(c *gin.Context) {
 	}
 
 	tx.Commit()
+	invalidateQuizQuestions(quiz.ID)
 
 	// Record Audit Log
 	audit.Record(userID.(uint), "update_quiz", fmt.Sprintf("quiz_%d", quiz.ID), c.ClientIP())
@@ -2134,6 +2394,7 @@ func DeleteQuiz(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete quiz"})
 		return
 	}
+	invalidateQuizQuestions(quiz.ID)
 
 	// Record Audit Log
 	audit.Record(userID.(uint), "delete_quiz", fmt.Sprintf("quiz_%d", id), c.ClientIP())
@@ -2187,8 +2448,16 @@ func GetRoom(c *gin.Context) {
 		//
 		// The host path below still returns the full roster — it is the one caller
 		// that actually renders it.
-		var playerCount int64
-		db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
+		// player_count, max_players and plan_name used to be computed here too —
+		// a COUNT over the room's players and a license lookup on every poll,
+		// the single largest DB cost under load (measured 2026-09-24), for three
+		// fields the play page never reads. The host branch still returns them.
+		qset, err := quizQuestions(room.QuizID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
+			return
+		}
+		qCount := int64(len(qset.list))
 
 		var currentPlayer model.Player
 		var activeQuestionInfo interface{}
@@ -2204,23 +2473,12 @@ func GetRoom(c *gin.Context) {
 			ensureSoloQuestionAssigned(&room, &currentPlayer)
 		}
 		if isPlayerPaced && currentPlayer.CurrentQuestionID != nil {
-			var question model.Question
-			if db.DB.First(&question, *currentPlayer.CurrentQuestionID).Error == nil {
+			if question, qIndex, ok := qset.byID(*currentPlayer.CurrentQuestionID); ok {
 				// Start per-player timer on first view of the question
 				if currentPlayer.QuestionActiveUntil == nil {
 					until := time.Now().Add(time.Duration(question.Duration) * time.Second)
 					currentPlayer.QuestionActiveUntil = &until
 					db.DB.Model(&currentPlayer).Update("question_active_until", until)
-				}
-				qIndex := 0
-				var allQs []model.Question
-				if db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&allQs).Error == nil {
-					for i, q := range allQs {
-						if q.ID == question.ID {
-							qIndex = i
-							break
-						}
-					}
 				}
 				activeInfo := gin.H{
 					"id":       question.ID,
@@ -2229,7 +2487,7 @@ func GetRoom(c *gin.Context) {
 					"options":  sanitizePlayerOptions(question.Options),
 					"duration": question.Duration,
 					"index":    qIndex,
-					"total":    len(allQs),
+					"total":    len(qset.list),
 				}
 				if currentPlayer.QuestionActiveUntil != nil {
 					activeInfo["active_until"] = currentPlayer.QuestionActiveUntil.UTC().Format(time.RFC3339)
@@ -2241,16 +2499,12 @@ func GetRoom(c *gin.Context) {
 		}
 
 		// Return limited info: no quiz details, no host_id, no pin_code
-		var qCount int64
-		db.DB.Model(&model.Question{}).Where("quiz_id = ?", room.QuizID).Count(&qCount)
-
 		if !isPlayerPaced && room.CurrentQuestionID != nil {
 			// Host-paced rooms used to fall through with current_question: null even
 			// mid-question, so a player who reloaded had no server deadline to resync
 			// against and their timer restarted at full duration. The room row already
 			// carries the active question and its deadline — this just reports them.
-			var question model.Question
-			if db.DB.First(&question, *room.CurrentQuestionID).Error == nil {
+			if question, _, ok := qset.byID(*room.CurrentQuestionID); ok {
 				activeInfo := gin.H{
 					"id":       question.ID,
 					"content":  question.Content,
@@ -2268,21 +2522,16 @@ func GetRoom(c *gin.Context) {
 				activeQuestionInfo = activeInfo
 			}
 		}
-		entsPlayer, _ := license.GetEntitlements(room.HostID)
-
 		c.JSON(http.StatusOK, gin.H{
 			"id":           room.ID,
 			"status":       room.Status,
 			"theme_config": room.ThemeConfig,
-			// "players" is deliberately absent. The frontend already falls back to
-			// an empty array (app/actions/quizzes.ts) and reads player_count from
-			// its own field, so nothing downstream needs the roster here.
+			// "players" is deliberately absent, and so are player_count,
+			// max_players and plan_name — lib/game-session.ts defaults all four
+			// and the play page reads none of them.
 			"current_question":       activeQuestionInfo,
 			"question_count":         qCount,
 			"current_question_index": room.CurrentQuestionIndex,
-			"max_players":            entsPlayer.MaxPlayersPerRoom,
-			"player_count":           playerCount,
-			"plan_name":              entsPlayer.PlanName,
 		})
 		return
 	}
@@ -2365,6 +2614,17 @@ func GetRoomResults(c *gin.Context) {
 		return
 	}
 
+	// A finished room's results are encoded once (results_cache.go): the whole
+	// room asks in the same second the game ends.
+	if e := cachedResults(uint(roomID)); e != nil {
+		if hostID != 0 && e.hostID != hostID {
+			c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
+			return
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", e.render(callerNickname))
+		return
+	}
+
 	var room model.Room
 	if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
@@ -2373,6 +2633,12 @@ func GetRoomResults(c *gin.Context) {
 	if hostID != 0 && room.HostID != hostID {
 		c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
 		return
+	}
+	if room.Status == "finished" {
+		if e := buildResults(&room); e != nil {
+			c.Data(http.StatusOK, "application/json; charset=utf-8", e.render(callerNickname))
+			return
+		}
 	}
 
 	players := getRoomPlayers(room.ID, room.Status)
@@ -2401,6 +2667,12 @@ func GetRoomResults(c *gin.Context) {
 		// Why the game ended, for a client that arrived after the push (or
 		// reloaded the results page, where the websocket payload is long gone).
 		"ended_reason": room.EndedReason,
+		// The host's branding. The results screen is where a room spends its
+		// last minute — the host reads out the podium off the projector while
+		// everyone checks their own rank — so it is the one screen where the
+		// event's key visual is most worth keeping, and it was the only game
+		// screen still falling back to the plain gradient.
+		"theme_config": room.ThemeConfig,
 	})
 }
 
@@ -2488,11 +2760,12 @@ func GetPlayerQuestion(c *gin.Context) {
 		return
 	}
 
-	var questions []model.Question
-	if err := db.DB.Where("quiz_id = ?", room.QuizID).Order("questions.order ASC, questions.id ASC").Find(&questions).Error; err != nil {
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
 		return
 	}
+	questions := qset.list
 	if index >= len(questions) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Question not found"})
 		return
@@ -2649,32 +2922,41 @@ func GetRoomByPin(c *gin.Context) {
 	})
 }
 
+// archivedPlayers reads a finished room's final ranking from its
+// game_sessions archive, in archive order (score DESC). nil means the archive
+// is not there or not readable yet — see the window described in getRoomPlayers.
+func archivedPlayers(roomID uint) []model.Player {
+	var players []model.Player
+	var session model.GameSession
+	if db.DB.Where("room_id = ?", roomID).First(&session).Error == nil {
+		type Ranking struct {
+			Nickname       string `json:"nickname"`
+			Score          int    `json:"score"`
+			CorrectAnswers int    `json:"correct_answers"`
+		}
+		var rankings []Ranking
+		if json.Unmarshal([]byte(session.Rankings), &rankings) == nil {
+			players = make([]model.Player, len(rankings))
+			for i, r := range rankings {
+				players[i] = model.Player{
+					ID:             uint(i + 1),
+					RoomID:         roomID,
+					Nickname:       r.Nickname,
+					Score:          r.Score,
+					CorrectAnswers: r.CorrectAnswers,
+				}
+				// CurrentQuestionID is nil here, which the host screen reads as
+				// "done" — correct for an archived game.
+			}
+		}
+	}
+	return players
+}
+
 func getRoomPlayers(roomID uint, status string) []model.Player {
 	var players []model.Player
 	if status == "finished" {
-		var session model.GameSession
-		if db.DB.Where("room_id = ?", roomID).First(&session).Error == nil {
-			type Ranking struct {
-				Nickname       string `json:"nickname"`
-				Score          int    `json:"score"`
-				CorrectAnswers int    `json:"correct_answers"`
-			}
-			var rankings []Ranking
-			if json.Unmarshal([]byte(session.Rankings), &rankings) == nil {
-				players = make([]model.Player, len(rankings))
-				for i, r := range rankings {
-					players[i] = model.Player{
-						ID:             uint(i + 1),
-						RoomID:         roomID,
-						Nickname:       r.Nickname,
-						Score:          r.Score,
-						CorrectAnswers: r.CorrectAnswers,
-					}
-					// CurrentQuestionID is nil here, which the host screen reads as
-					// "done" — correct for an archived game.
-				}
-			}
-		}
+		players = archivedPlayers(roomID)
 		if len(players) > 0 {
 			return players
 		}

@@ -74,6 +74,13 @@ var vi = map[string]string{
 
 	// Quiz / template
 	"Quiz not found":                                      "Không tìm thấy quiz",
+	"This shared quiz is read-only — duplicate it to make changes": "Quiz này chỉ cho xem — hãy nhân bản rồi sửa trên bản của bạn",
+	"Failed to prepare room settings":                     "Không chuẩn bị được cấu hình phòng",
+	"Quiz is being played right now":                      "Quiz đang có phòng chơi, không sửa được lúc này",
+	"Quiz was changed by someone else":                    "Quiz vừa được người khác sửa, hãy tải lại rồi lưu lại",
+	"Failed to update quiz sharing":                       "Không cập nhật được chế độ chia sẻ",
+	"Failed to fetch shared quizzes":                      "Không tải được danh sách quiz chia sẻ",
+	"Failed to check running rooms":                       "Không kiểm tra được phòng đang chạy",
 	"Quiz has no questions":                               "Quiz chưa có câu hỏi nào",
 	"Quiz has no questions to save":                       "Quiz không có câu hỏi nào để lưu",
 	"Question not found":                                  "Không tìm thấy câu hỏi",
