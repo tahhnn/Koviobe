@@ -210,6 +210,7 @@ func SubmitAnswerRateLimit() gin.HandlerFunc {
 
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error":       "Too many answer submissions. Please slow down.",
+			"code":        "RATE_LIMITED",
 			"retry_after": "1m",
 		})
 		c.Abort()

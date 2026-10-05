@@ -470,15 +470,18 @@ func GetRealtimeToken(c *gin.Context) {
 			return
 		}
 		var player model.Player
-		if err := db.DB.Where("id = ? AND room_id = ? AND is_connected = ?", claims.PlayerID, claims.RoomID, true).First(&player).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Player session is no longer active"})
+		if err := db.DB.Where("id = ? AND room_id = ?", claims.PlayerID, claims.RoomID).First(&player).Error; err != nil {
+			sessionInvalid(c)
 			return
 		}
 		var room model.Room
 		if err := db.DB.Where("id = ? AND status != ?", claims.RoomID, "finished").First(&room).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Active room not found"})
+			playerError(c, http.StatusNotFound, "Active room not found", codeRoomFinished)
 			return
 		}
+		// A flagged row is a reload, not a departure — see reconnectPlayer.
+		// Refusing it here left the reloaded page without realtime for good.
+		reconnectPlayer(&player, &room)
 		clientID = fmt.Sprintf("player_%d_%s", player.ID, player.Nickname)
 		channel = realtime.RoomChannel(room.PinCode)
 	}
@@ -511,15 +514,16 @@ func GetPlayerRealtimeToken(c *gin.Context) {
 	}
 
 	var player model.Player
-	if err := db.DB.Where("id = ? AND room_id = ? AND is_connected = ?", claims.PlayerID, claims.RoomID, true).First(&player).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Player session is no longer active"})
+	if err := db.DB.Where("id = ? AND room_id = ?", claims.PlayerID, claims.RoomID).First(&player).Error; err != nil {
+		sessionInvalid(c)
 		return
 	}
 	var room model.Room
 	if err := db.DB.Where("id = ? AND status != ?", claims.RoomID, "finished").First(&room).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Active room not found"})
+		playerError(c, http.StatusNotFound, "Active room not found", codeRoomFinished)
 		return
 	}
+	reconnectPlayer(&player, &room)
 
 	clientID := fmt.Sprintf("player_%d_%s", player.ID, player.Nickname)
 	channel := realtime.RoomChannel(room.PinCode)

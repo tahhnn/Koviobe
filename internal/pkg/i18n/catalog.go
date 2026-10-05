@@ -58,6 +58,7 @@ var vi = map[string]string{
 	"Token room mismatch":                                   "Token không khớp với phòng này",
 	"Nickname is already taken in this room":                "Biệt danh này đã có người dùng trong phòng",
 	"Joining is closed, the game already started":           "Phòng đã bắt đầu, không thể vào thêm",
+	"This game has already ended":                           "Trò chơi này đã kết thúc",
 	"Player not found":                                      "Không tìm thấy người chơi",
 	"Player session is no longer active":                    "Phiên người chơi đã kết thúc",
 	"You have already answered this question":               "Bạn đã trả lời câu hỏi này rồi",
