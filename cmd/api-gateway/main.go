@@ -56,6 +56,7 @@ func main() {
 	cron.StartSettingsRefreshWorker()
 	cron.StartUploadCleanupWorker()
 	cron.StartDigestWorker()
+	cron.StartAuditRetentionWorker()
 	// Read-only command bot. Started after the services it reports on, so
 	// /status never answers about a half-initialised process.
 	telegrambot.Start(telegrambot.Config{
@@ -183,7 +184,17 @@ func main() {
 				adminUsers.GET("", handler.AdminListUsers)
 				adminUsers.PATCH("/:id/role", handler.AdminUpdateUserRole)
 				adminUsers.PATCH("/:id/status", handler.AdminUpdateUserStatus)
+				adminUsers.GET("/:id/activity", middleware.RequirePermission("audit:read"), handler.AdminUserActivity)
 			}
+
+			// Account audit trail — admin only (decision 2026-10-05).
+			adminAudit := private.Group("/admin/audit")
+			adminAudit.Use(middleware.RequireRole("admin"), middleware.RequirePermission("audit:read"))
+			{
+				adminAudit.GET("", handler.AdminListAudit)
+				adminAudit.GET("/actions", handler.AdminListAuditActions)
+			}
+			private.GET("/admin/audit.csv", middleware.RequireRole("admin"), middleware.RequirePermission("audit:read"), handler.AdminExportAuditCSV)
 
 			// Quiz & Question Management (Host/Admin)
 			quizzes := private.Group("/quizzes")

@@ -38,6 +38,8 @@ func AdminListUsers(c *gin.Context) {
 		IsActive    bool   `json:"is_active"`
 		IsSeedAdmin bool   `json:"is_seed_admin"`
 		CreatedAt   string `json:"created_at"`
+		LastLoginAt string `json:"last_login_at,omitempty"`
+		Rooms30d    int64  `json:"rooms_30d"`
 	}
 
 	seedEmail := strings.ToLower(strings.TrimSpace(os.Getenv("SEED_ADMIN_EMAIL")))
@@ -61,6 +63,7 @@ func AdminListUsers(c *gin.Context) {
 	}
 
 	subs := subscriptionsByUser(users)
+	rooms30 := rooms30dByHost(users)
 
 	out := make([]row, 0, len(users))
 	for _, u := range users {
@@ -73,6 +76,10 @@ func AdminListUsers(c *gin.Context) {
 			IsActive:    u.IsActive,
 			IsSeedAdmin: strings.EqualFold(u.Email, seedEmail),
 			CreatedAt:   u.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			Rooms30d:    rooms30[u.ID],
+		}
+		if u.LastLoginAt != nil {
+			r.LastLoginAt = u.LastLoginAt.Format("2006-01-02T15:04:05Z07:00")
 		}
 		if u.Role != nil {
 			r.Role = u.Role.Name

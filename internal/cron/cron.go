@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/handler"
 	"github.com/quizzzone/backend/internal/model"
@@ -223,5 +224,37 @@ func cleanupAbandonedRooms() {
 		}
 
 		log.Printf("[CRON] Successfully archived and cleaned up abandoned room %d\n", room.ID)
+	}
+}
+
+// StartAuditRetentionWorker deletes audit rows past AUDIT_RETENTION_DAYS once a
+// day. admin_* and license_* rows are kept: they are the trail of privilege
+// and money changes, and they are few.
+func StartAuditRetentionWorker() {
+	go func() {
+		time.Sleep(2 * time.Minute)
+		purgeOldAudit()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			purgeOldAudit()
+		}
+	}()
+}
+
+func purgeOldAudit() {
+	days := config.AppConfig.AuditRetentionDays
+	if days <= 0 {
+		return
+	}
+	res := db.DB.Exec(`DELETE FROM audit_logs
+		WHERE created_at < NOW() - make_interval(days => ?)
+		  AND action NOT LIKE 'admin\_%' AND action NOT LIKE 'license\_%'`, days)
+	if res.Error != nil {
+		log.Printf("[CRON] audit retention failed: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("[CRON] audit retention: deleted %d row(s) older than %d days.", res.RowsAffected, days)
 	}
 }

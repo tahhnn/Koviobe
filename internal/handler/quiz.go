@@ -533,7 +533,9 @@ func CreateRoom(c *gin.Context) {
 	}
 
 	// Record Audit Log
-	audit.Record(uid, "create_room", fmt.Sprintf("room_%d", room.ID), c.ClientIP())
+	audit.Log(c, uid, "create_room", fmt.Sprintf("room_%d", room.ID), map[string]any{
+		"room_id": room.ID, "pin": room.PinCode, "quiz_id": quiz.ID, "quiz_title": quiz.Title,
+	})
 
 	c.JSON(http.StatusCreated, gin.H{
 		"id":                     room.ID,
@@ -886,7 +888,11 @@ func StartGame(c *gin.Context) {
 	})
 
 	// Record Audit Log
-	audit.Record(userID.(uint), "start_game", fmt.Sprintf("room_%d", room.ID), c.ClientIP())
+	var startCount int64
+	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&startCount)
+	audit.Log(c, userID.(uint), "start_game", fmt.Sprintf("room_%d", room.ID), map[string]any{
+		"room_id": room.ID, "pin": room.PinCode, "quiz_id": room.QuizID, "player_count": startCount,
+	})
 
 	c.JSON(http.StatusOK, gin.H{"message": "Game started"})
 }
@@ -1969,7 +1975,9 @@ func EndGame(c *gin.Context) {
 	}
 
 	// Record Audit Log
-	audit.Record(userID.(uint), "end_game", fmt.Sprintf("room_%d", room.ID), c.ClientIP())
+	audit.Log(c, userID.(uint), "end_game", fmt.Sprintf("room_%d", room.ID), map[string]any{
+		"room_id": room.ID, "pin": room.PinCode, "quiz_id": room.QuizID, "player_count": len(rankings),
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":       "Game ended and room closed",

@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
+	"github.com/quizzzone/backend/internal/pkg/audit"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"gorm.io/gorm"
 )
@@ -96,6 +98,12 @@ func ExportRoomLogs(c *gin.Context) {
 	var answers []model.AnswerLog
 	db.DB.Where("room_id = ?", room.ID).Order("id ASC").Find(&answers)
 	players := getRoomPlayers(room.ID, room.Status)
+
+	// An export is data leaving the system, so it is recorded even though
+	// viewing the same report is not (decision 2026-10-05).
+	audit.Log(c, uid, "export_room_logs", fmt.Sprintf("room_%d", room.ID), map[string]any{
+		"room_id": room.ID, "rows": len(answers), "player_count": len(players),
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"room":    room,

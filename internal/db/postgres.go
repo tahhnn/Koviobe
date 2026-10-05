@@ -107,6 +107,7 @@ func seedDefaultData() {
 		{Name: "quiz:delete", Description: "Allow deleting quizzes"},
 		{Name: "room:control", Description: "Allow controlling room sessions (start, next, end)"},
 		{Name: "logs:read", Description: "Allow reading finished game reports and score logs"},
+		{Name: auditReadPerm, Description: "Allow reading the account audit trail (admin only)"},
 	}
 
 	for i, perm := range permissionsList {
@@ -123,6 +124,15 @@ func seedDefaultData() {
 	// Fetch all permissions for seeding roles
 	var allPerms []model.Permission
 	DB.Find(&allPerms)
+	// Hosts get every permission except the audit trail, which is admin-only
+	// (decision 2026-10-05). Without this a fresh install would hand it to
+	// every host through the "all permissions" seed below.
+	hostPerms := make([]model.Permission, 0, len(allPerms))
+	for _, p := range allPerms {
+		if p.Name != auditReadPerm {
+			hostPerms = append(hostPerms, p)
+		}
+	}
 
 	// 2. Seed Roles
 	var hostRole model.Role
@@ -135,7 +145,7 @@ func seedDefaultData() {
 		hostRole = model.Role{
 			Name:        "host",
 			Description: "Quiz hosts who create quizzes and adjust room games",
-			Permissions: allPerms,
+			Permissions: hostPerms,
 		}
 		if err := DB.Create(&hostRole).Error; err != nil {
 			log.Printf("Failed to seed host role: %v", err)
@@ -160,7 +170,9 @@ func seedDefaultData() {
 		log.Println("Admin role seeded.")
 	} else {
 		DB.Preload("Permissions").Where("name = ?", "admin").First(&adminRole)
+		grantAdminPermission(&adminRole, allPerms, auditReadPerm)
 	}
+	backfillAuditStatus()
 
 	seedPricingPlans()
 	backfillFreeSubscriptions()
@@ -388,5 +400,45 @@ func backfillFreeSubscriptions() {
 	}
 	if res.RowsAffected > 0 {
 		log.Printf("Backfilled free subscriptions for %d user(s).", res.RowsAffected)
+	}
+}
+
+const auditReadPerm = "audit:read"
+
+// grantAdminPermission attaches a permission added after the admin role was
+// first seeded. The role is only created once, with the permissions that
+// existed then, so new ones have to be appended to the existing row.
+func grantAdminPermission(adminRole *model.Role, allPerms []model.Permission, name string) {
+	if adminRole.ID == 0 {
+		return
+	}
+	for _, p := range adminRole.Permissions {
+		if p.Name == name {
+			return
+		}
+	}
+	for i := range allPerms {
+		if allPerms[i].Name == name {
+			if err := DB.Model(adminRole).Association("Permissions").Append(&allPerms[i]); err != nil {
+				log.Printf("Failed to grant %s to admin role: %v", name, err)
+				return
+			}
+			log.Printf("Granted %s to admin role.", name)
+			return
+		}
+	}
+}
+
+// backfillAuditStatus marks the refused attempts recorded before audit_logs
+// had a status column. The column arrived with default 'success', which is
+// wrong for every login_failed_* / *_failed row already there. Idempotent.
+func backfillAuditStatus() {
+	res := DB.Exec(`UPDATE audit_logs SET status = 'failed' WHERE status = 'success' AND action LIKE '%failed%'`)
+	if res.Error != nil {
+		log.Printf("Failed to backfill audit status: %v", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Printf("Backfilled audit status=failed on %d row(s).", res.RowsAffected)
 	}
 }

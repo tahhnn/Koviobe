@@ -37,6 +37,12 @@ type User struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// Set on every successful password login (see handler.Login). A refresh
+	// does not count: it is the browser keeping a session alive, not a person
+	// signing in.
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	LastLoginIP string     `gorm:"size:45" json:"-"`
 }
 
 // Quiz represents a questionnaire created by a Host.
@@ -166,11 +172,18 @@ type GameSession struct {
 }
 
 // AuditLog records Host/Admin actions for security monitoring.
+//
+// The three composite indexes serve the admin audit screen: one account's
+// timeline, one action across accounts, and the unfiltered newest-first list.
+// Each ends in created_at DESC so a page is an index range scan.
 type AuditLog struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
-	UserID    uint      `gorm:"index;not null" json:"user_id"`
-	Action    string    `gorm:"size:100;not null" json:"action"`   // e.g., "create_quiz", "delete_template"
-	Resource  string    `gorm:"size:255;not null" json:"resource"` // e.g., "quiz_12", "template_5"
+	UserID    uint      `gorm:"index;index:idx_audit_user_time,priority:1;not null" json:"user_id"`
+	Action    string    `gorm:"size:100;not null;index:idx_audit_action_time,priority:1" json:"action"` // e.g., "create_quiz", "delete_template"
+	Resource  string    `gorm:"size:255;not null" json:"resource"`                                      // e.g., "quiz_12", "template_5"
 	IPAddress string    `gorm:"size:45" json:"ip_address"`
-	CreatedAt time.Time `json:"created_at"`
+	UserAgent string    `gorm:"size:255" json:"user_agent"`
+	Status    string    `gorm:"size:16;not null;default:success" json:"status"` // success | failed
+	Metadata  *string   `gorm:"type:jsonb" json:"-"`                            // structured detail; see audit.allowedMetaKeys
+	CreatedAt time.Time `gorm:"index:idx_audit_user_time,priority:2,sort:desc;index:idx_audit_action_time,priority:2,sort:desc;index:idx_audit_time,sort:desc" json:"created_at"`
 }
