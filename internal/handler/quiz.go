@@ -608,7 +608,7 @@ func ListPublicRooms(c *gin.Context) {
 	out := make([]publicRoom, 0, len(rooms))
 	for _, room := range rooms {
 		var playerCount int64
-		db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
+		db.DB.Model(&model.Player{}).Where("room_id = ? AND is_connected = ?", room.ID, true).Count(&playerCount)
 		ents, _ := license.GetEntitlements(room.HostID)
 		title := room.Quiz.Title
 		if title == "" {
@@ -635,9 +635,21 @@ func JoinRoom(c *gin.Context) {
 		return
 	}
 
+	// Look the PIN up whatever the room's state. Filtering on "waiting" here
+	// told everyone who arrived after the start that their PIN was wrong — 27
+	// players at B.FEST 2026-10-03 — when the truth is that joining had closed.
 	var room model.Room
-	if err := db.DB.Where("pin_code = ? AND status = ?", req.PinCode, "waiting").First(&room).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found or invalid PIN"})
+	if err := db.DB.Where("pin_code = ?", req.PinCode).First(&room).Error; err != nil {
+		playerError(c, http.StatusNotFound, "Room not found or invalid PIN", codeRoomNotFound)
+		return
+	}
+	switch room.Status {
+	case "waiting":
+	case "finished":
+		playerError(c, http.StatusGone, "This game has already ended", codeRoomFinished)
+		return
+	default:
+		playerError(c, http.StatusConflict, "Joining is closed, the game already started", codeJoinClosed)
 		return
 	}
 
@@ -658,8 +670,18 @@ func JoinRoom(c *gin.Context) {
 	var existingPlayer model.Player
 	err := db.DB.Where("room_id = ? AND nickname = ?", room.ID, req.Nickname).First(&existingPlayer).Error
 	if err == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Nickname is already taken in this room"})
-		return
+		if existingPlayer.IsConnected {
+			playerError(c, http.StatusBadRequest, "Nickname is already taken in this room", codeNicknameTaken)
+			return
+		}
+		// The holder's page unloaded in the lobby (LeaveRoom only flags it now).
+		// Someone typing the same name is far more likely the same person on a
+		// new tab than an impostor, and refusing would strand them: free it.
+		if err := db.DB.Where("id = ? AND is_connected = ?", existingPlayer.ID, false).
+			Delete(&model.Player{}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to join room"})
+			return
+		}
 	}
 
 	player := model.Player{
@@ -706,7 +728,7 @@ func JoinRoom(c *gin.Context) {
 		// enforcement this was a full count of the room on every single join.
 		if license.Enforcing() {
 			var playerCount int64
-			if err := tx.Model(&model.Player{}).Where("room_id = ?", lockedRoom.ID).Count(&playerCount).Error; err != nil {
+			if err := tx.Model(&model.Player{}).Where("room_id = ? AND is_connected = ?", lockedRoom.ID, true).Count(&playerCount).Error; err != nil {
 				return err
 			}
 			if int(playerCount) >= maxPlayers {
@@ -719,12 +741,13 @@ func JoinRoom(c *gin.Context) {
 	})
 
 	if roomStarted {
-		c.JSON(http.StatusConflict, gin.H{"error": "Joining is closed, the game already started"})
+		playerError(c, http.StatusConflict, "Joining is closed, the game already started", codeJoinClosed)
 		return
 	}
 	if roomFull {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error":       fmt.Sprintf("Room is full (max %d players on host's %s plan)", maxPlayers, ents.PlanName),
+			"code":        codeRoomFull,
 			"max_players": maxPlayers,
 			"plan_id":     ents.PlanID,
 		})
@@ -732,7 +755,7 @@ func JoinRoom(c *gin.Context) {
 	}
 	if txErr != nil {
 		if strings.Contains(strings.ToLower(txErr.Error()), "unique") || strings.Contains(strings.ToLower(txErr.Error()), "duplicate") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Nickname is already taken in this room"})
+			playerError(c, http.StatusBadRequest, "Nickname is already taken in this room", codeNicknameTaken)
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to join room"})
@@ -813,6 +836,14 @@ func StartGame(c *gin.Context) {
 		if locked.Status != "waiting" {
 			notWaiting = true
 			return fmt.Errorf("not_waiting")
+		}
+
+		// Players whose page unloaded in the lobby and never came back are
+		// removed now, as LeaveRoom used to do on the spot. Doing it at the
+		// start instead is what lets a lobby refresh keep its seat.
+		if err := tx.Where("room_id = ? AND is_connected = ?", locked.ID, false).
+			Delete(&model.Player{}).Error; err != nil {
+			return err
 		}
 
 		locked.Status = "active"
@@ -1193,7 +1224,7 @@ func SubmitAnswer(c *gin.Context) {
 	// has always decided. A room that is not running is refused there.
 	room, err := submitRoomMeta(playerClaims.RoomID)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		playerError(c, http.StatusBadRequest, "Room is not active", codeLate)
 		return
 	}
 
@@ -1232,14 +1263,14 @@ func SubmitAnswer(c *gin.Context) {
 	// not First, so the lookup rides the unique index instead of an ORDER BY.
 	claimed, redisOK := claimAnswer(c.Request.Context(), playerClaims.PlayerID, req.QuestionID)
 	if redisOK && !claimed {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
+		playerError(c, http.StatusBadRequest, "You have already answered this question", codeAlreadyAnswered)
 		return
 	}
 	if !redisOK {
 		var existingLog model.AnswerLog
 		if db.DB.Where("player_id = ? AND question_id = ?", playerClaims.PlayerID, req.QuestionID).
 			Take(&existingLog).Error == nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
+			playerError(c, http.StatusBadRequest, "You have already answered this question", codeAlreadyAnswered)
 			return
 		}
 	}
@@ -1448,17 +1479,17 @@ func SubmitAnswer(c *gin.Context) {
 		}
 		switch err.Error() {
 		case "player_not_found":
-			c.JSON(http.StatusNotFound, gin.H{"error": "Player not found"})
+			playerError(c, http.StatusNotFound, "Player not found", codePlayerNotFound)
 		case "token_room_mismatch":
-			c.JSON(http.StatusForbidden, gin.H{"error": "Token room mismatch"})
+			playerError(c, http.StatusForbidden, "Token room mismatch", codeSessionInvalid)
 		case "already_answered":
-			c.JSON(http.StatusBadRequest, gin.H{"error": "You have already answered this question"})
+			playerError(c, http.StatusBadRequest, "You have already answered this question", codeAlreadyAnswered)
 		case "question_not_active":
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Question is not currently active"})
+			playerError(c, http.StatusBadRequest, "Question is not currently active", codeLate)
 		case "time_exceeded":
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Time limit exceeded for this question"})
+			playerError(c, http.StatusBadRequest, "Time limit exceeded for this question", codeLate)
 		case "room_not_active":
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+			playerError(c, http.StatusBadRequest, "Room is not active", codeLate)
 		case "room_finished":
 			// Same sentinel and status the question fetch uses for a closed room,
 			// so the client takes the path it already has: straight to results.
@@ -2461,7 +2492,18 @@ func GetRoom(c *gin.Context) {
 
 		var currentPlayer model.Player
 		var activeQuestionInfo interface{}
-		db.DB.Where("id = ?", pClaims.PlayerID).First(&currentPlayer)
+		if err := db.DB.Where("id = ? AND room_id = ?", pClaims.PlayerID, room.ID).First(&currentPlayer).Error; err != nil {
+			// A finished room has already deleted its player rows and the client
+			// needs the "finished" status to reach the podium. Anywhere else a
+			// missing row used to answer 200, so a player removed from the room
+			// kept playing and had every answer rejected with 404.
+			if room.Status != "finished" {
+				sessionInvalid(c)
+				return
+			}
+		} else {
+			reconnectPlayer(&currentPlayer, &room)
+		}
 
 		var config struct {
 			GameMode string `json:"game_mode"`
@@ -2868,7 +2910,14 @@ func LeaveRoom(c *gin.Context) {
 	// load found no player and dumped them to the results page. While the game
 	// is running, only mark the player disconnected; the row survives a reload
 	// and the finished-game cleanup in finalizeRoom removes it later.
-	if roomErr == nil && room.Status == "active" {
+	//
+	// The lobby had the same hole: a refresh there deleted the player, the
+	// reloaded page kept its token, and once the host started every answer
+	// came back 404 (B.FEST 2026-10-02 and 10-03). reason=unload now flags the
+	// row in the lobby too; reconnectPlayer restores it on the next call and
+	// StartGame drops whoever never came back.
+	unload := c.Query("reason") == "unload"
+	if roomErr == nil && (room.Status == "active" || (unload && room.Status == "waiting")) {
 		if err := db.DB.Model(&model.Player{}).
 			Where("id = ? AND room_id = ?", pClaims.PlayerID, uint(roomID)).
 			Update("is_connected", false).Error; err != nil {
@@ -2908,7 +2957,7 @@ func GetRoomByPin(c *gin.Context) {
 
 	ents, _ := license.GetEntitlements(room.HostID)
 	var playerCount int64
-	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
+	db.DB.Model(&model.Player{}).Where("room_id = ? AND is_connected = ?", room.ID, true).Count(&playerCount)
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":           room.ID,
@@ -2975,7 +3024,13 @@ func getRoomPlayers(roomID uint, status string) []model.Player {
 		// is both correct and the same data the archive is about to hold.
 	}
 	{
-		db.DB.Where("room_id = ?", roomID).Find(&players)
+		q := db.DB.Where("room_id = ?", roomID)
+		if status == "waiting" {
+			// A lobby shows who is actually there. Once the game runs, a player
+			// mid-reload stays on the board; StartGame already dropped the rest.
+			q = q.Where("is_connected = ?", true)
+		}
+		q.Find(&players)
 
 		// One aggregate for both numbers. Correct-only used to be its own query;
 		// solo mode also needs the total submitted (see Player.AnsweredCount), and
