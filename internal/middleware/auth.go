@@ -6,7 +6,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/quizzzone/backend/internal/db"
-	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 )
 
@@ -35,11 +34,8 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Role.Permissions must be preloaded — the authorization decision below reads
-		// them off this row, and without the preload user.Role is nil and every
-		// caller silently degrades to no role and no permissions.
-		var user model.User
-		if err := db.DB.Preload("Role.Permissions").First(&user, claims.UserID).Error; err != nil {
+		user, ok := loadPrincipal(claims.UserID)
+		if !ok {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
 			c.Abort()
 			return
@@ -53,13 +49,13 @@ func AuthMiddleware() gin.HandlerFunc {
 		// Role and permissions come from the freshly loaded user row, not from the
 		// token claims. Reading them from the claims kept a demoted or
 		// permission-stripped user at their old level until the 15-minute access
-		// token expired; the DB is authoritative and is already in hand here.
+		// token expired; the DB is authoritative and is read on every request.
 		role := "player"
 		var permissions []string
-		if user.Role != nil {
-			role = user.Role.Name
-			for _, perm := range user.Role.Permissions {
-				permissions = append(permissions, perm.Name)
+		if user.RoleName != nil {
+			role = *user.RoleName
+			if user.Perms != "" {
+				permissions = strings.Split(user.Perms, ",")
 			}
 		}
 
@@ -71,6 +67,38 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		c.Next()
 	}
+}
+
+// principal is what AuthMiddleware needs to know about the caller.
+type principal struct {
+	ID       uint
+	Email    string
+	IsActive bool
+	RoleName *string // nil: no role, or the role was soft-deleted
+	Perms    string  // comma-joined permission names; names never contain a comma
+}
+
+// loadPrincipal reads the user, their role and its permissions in one query.
+//
+// Preload("Role.Permissions") did the same in four (users, roles,
+// role_permissions, permissions) on every authenticated request — ~35k calls
+// of each since 2026-09-24. The joins keep the Preload's soft-delete rules:
+// a deleted user is not found, and a deleted role reads as no role.
+func loadPrincipal(userID uint) (principal, bool) {
+	var p principal
+	res := db.DB.Raw(`
+		SELECT u.id, u.email, u.is_active, r.name AS role_name,
+		       COALESCE(string_agg(p.name, ',' ORDER BY p.id), '') AS perms
+		FROM users u
+		LEFT JOIN roles r ON r.id = u.role_id AND r.deleted_at IS NULL
+		LEFT JOIN role_permissions rp ON rp.role_id = r.id
+		LEFT JOIN permissions p ON p.id = rp.permission_id
+		WHERE u.id = ? AND u.deleted_at IS NULL
+		GROUP BY u.id, r.name`, userID).Scan(&p)
+	if res.Error != nil || res.RowsAffected == 0 {
+		return principal{}, false
+	}
+	return p, true
 }
 
 // RequireRole checks if the user has one of the allowed roles.

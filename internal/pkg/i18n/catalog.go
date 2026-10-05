@@ -51,6 +51,7 @@ var vi = map[string]string{
 	"Active room not found":                                 "Không tìm thấy phòng đang hoạt động",
 	"Room is not active":                                    "Phòng chưa bắt đầu",
 	"Failed to start game":                                  "Không bắt đầu được trận đấu",
+	"Failed to activate question":                           "Không mở được câu hỏi",
 	"Question has no explanation slide":                     "Câu hỏi này không có slide giải thích",
 	"Room can only be started from waiting status":          "Chỉ có thể bắt đầu phòng đang ở trạng thái chờ",
 	"Privacy can only be changed while the room is waiting": "Chỉ đổi được chế độ riêng tư khi phòng đang chờ",
