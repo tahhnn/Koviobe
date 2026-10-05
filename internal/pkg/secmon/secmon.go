@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/quizzzone/backend/internal/cache"
@@ -21,6 +22,11 @@ import (
 const (
 	loginFailWindow    = 10 * time.Minute
 	loginFailThreshold = 25
+
+	// Per account, across addresses: a guess spread over many IPs never trips
+	// the per-IP counter above.
+	accountFailWindow    = 15 * time.Minute
+	accountFailThreshold = 10
 
 	redeemFailWindow    = 30 * time.Minute
 	redeemFailThreshold = 10
@@ -35,6 +41,18 @@ func LoginFailed(ip, email string) {
 			"Đăng nhập sai %d lần trong %s từ IP %s (lần cuối: %s) — nghi brute force / credential stuffing.",
 			loginFailThreshold, loginFailWindow, ip, email)
 	}
+	if email != "" && crossed("loginfail_account", strings.ToLower(email), accountFailThreshold, accountFailWindow) {
+		notify.P1("bruteforce_account",
+			"Tài khoản %s bị đăng nhập sai %d lần trong %s (lần cuối từ IP %s) — nghi có người dò mật khẩu.",
+			email, accountFailThreshold, accountFailWindow, ip)
+	}
+}
+
+// AdminNewIP reports an admin signing in from an address none of their
+// recorded logins came from. Admin sessions can change every account's role
+// and plan, so a new location is worth a human glance.
+func AdminNewIP(email, ip string) {
+	notify.P1("admin_login_new_ip", "Admin %s vừa đăng nhập từ IP mới %s.", email, ip)
 }
 
 // RedeemFailed records one rejected license code. A run of these is somebody

@@ -53,6 +53,9 @@ type Config struct {
 	// MaxPlayersPerRoomOpen is the room cap reported (and, once
 	// LICENSE_ENFORCEMENT is on, enforced) while license enforcement is off.
 	MaxPlayersPerRoomOpen int
+	// AuditRetentionDays: audit rows older than this are deleted daily, except
+	// admin_* and license_* which are kept (decision 2026-10-05: 365 days).
+	AuditRetentionDays int
 
 	// Telegram operational alerts (internal/pkg/notify). Leaving the token or
 	// chat ID empty disables the notifier entirely rather than failing startup,
@@ -125,6 +128,7 @@ func LoadConfig() {
 		SMTPTLS:              getEnv("SMTP_TLS", ""),
 		LicenseEnforcement:   getEnvBool("LICENSE_ENFORCEMENT", false),
 
+		AuditRetentionDays:       getEnvInt("AUDIT_RETENTION_DAYS", 365),
 		JoinRateLimitPerMin:      getEnvInt("JOIN_RATE_LIMIT_PER_MIN", 2000),
 		PinLookupRateLimitPerMin: getEnvInt("PIN_LOOKUP_RATE_LIMIT_PER_MIN", 2000),
 		MaxPlayersPerRoomOpen:    getEnvInt("MAX_PLAYERS_PER_ROOM_OPEN", 2000),

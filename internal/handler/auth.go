@@ -102,6 +102,16 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// Only failures used to be recorded, so the audit trail could say who was
+	// refused but never who got in.
+	if roleName == "admin" {
+		adminNewIPCheck(user.ID, user.Email, c.ClientIP())
+	}
+	now := time.Now()
+	db.DB.Model(&model.User{}).Where("id = ?", user.ID).
+		Updates(map[string]any{"last_login_at": now, "last_login_ip": c.ClientIP()})
+	audit.Log(c, user.ID, "login_success", fmt.Sprintf("user_%d", user.ID), map[string]any{"role": roleName})
+
 	c.JSON(http.StatusOK, gin.H{
 		"token":         token,
 		"refresh_token": refreshToken,
@@ -189,6 +199,9 @@ func Register(c *gin.Context) {
 	go func() {
 		_ = email.SendEmail(req.Email, "⚔️ QUIZBATTLE: Verify Your Account", htmlBody)
 	}()
+
+	// No account exists yet, so the row belongs to user 0 and names the email.
+	audit.Log(c, 0, "register_request_otp", req.Email, map[string]any{"email": req.Email})
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Verification code has been sent to your email.",
@@ -638,7 +651,29 @@ func Logout(c *gin.Context) {
 	var req RefreshTokenRequest
 	_ = c.ShouldBindJSON(&req)
 	if req.RefreshToken != "" {
+		// The route is public, so the refresh token is the only way to know
+		// whose session this was. An invalid one is still revoked and simply
+		// goes unrecorded.
+		if claims, err := jwt.VerifyRefreshToken(req.RefreshToken); err == nil {
+			audit.Log(c, claims.UserID, "logout", fmt.Sprintf("user_%d", claims.UserID), nil)
+		}
 		jwt.RevokeRefreshToken(req.RefreshToken)
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
+}
+
+// adminNewIPCheck alerts when an admin with a login history signs in from an
+// address that history does not contain. The first recorded login sets the
+// baseline silently — otherwise every admin would alert once on the first
+// login after this shipped.
+func adminNewIPCheck(userID uint, email, ip string) {
+	var prior, fromIP int64
+	db.DB.Model(&model.AuditLog{}).Where("user_id = ? AND action = 'login_success'", userID).Count(&prior)
+	if prior == 0 {
+		return
+	}
+	db.DB.Model(&model.AuditLog{}).Where("user_id = ? AND action = 'login_success' AND ip_address = ?", userID, ip).Count(&fromIP)
+	if fromIP == 0 {
+		secmon.AdminNewIP(email, ip)
+	}
 }
