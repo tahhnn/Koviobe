@@ -1455,7 +1455,14 @@ func SubmitAnswer(c *gin.Context) {
 				lockedPlayer.QuestionActiveUntil = nil
 				playerFinished = true
 			}
-			if err := tx.Save(&lockedPlayer).Error; err != nil {
+			// The three columns this step owns. Save wrote all nine back from the
+			// copy, is_connected and nickname included.
+			if err := tx.Model(&model.Player{}).Where("id = ?", lockedPlayer.ID).UpdateColumns(map[string]interface{}{
+				"score":                 lockedPlayer.Score,
+				"current_question_id":   nullableUint(lockedPlayer.CurrentQuestionID),
+				"question_active_until": nullableTime(lockedPlayer.QuestionActiveUntil),
+				"updated_at":            time.Now(),
+			}).Error; err != nil {
 				return err
 			}
 			finalScore = lockedPlayer.Score
@@ -3172,4 +3179,21 @@ func getRoomPlayers(roomID uint, status string) []model.Player {
 		}
 	}
 	return players
+}
+
+// nullableUint and nullableTime turn a nil pointer into an untyped nil, so a
+// column map writes NULL rather than relying on how the driver treats a typed
+// nil pointer.
+func nullableUint(p *uint) interface{} {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullableTime(p *time.Time) interface{} {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
