@@ -1347,23 +1347,23 @@ func SubmitAnswer(c *gin.Context) {
 	var player model.Player
 
 	err = db.DB.Transaction(func(tx *gorm.DB) error {
-		// Lock player row to prevent concurrent double-submit
-		var lockedPlayer model.Player
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, playerClaims.PlayerID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("player_not_found")
-			}
-			return err
-		}
-		// Extra check: ensure token's room matches the player's actual room
-		if lockedPlayer.RoomID != playerClaims.RoomID {
-			return fmt.Errorf("token_room_mismatch")
-		}
-		player = lockedPlayer
-		// No repeat SELECT here any more: the claim above filtered the ordinary
-		// case, and the INSERT below hits idx_player_question for the rest.
-
 		if isPlayerPaced {
+			// Solo mode reads the player's own question and deadline and moves
+			// them on, so the row is locked for the read-modify-write. Every
+			// player locks only their own row: there is no contention here.
+			var lockedPlayer model.Player
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&lockedPlayer, playerClaims.PlayerID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return fmt.Errorf("player_not_found")
+				}
+				return err
+			}
+			// Extra check: ensure token's room matches the player's actual room
+			if lockedPlayer.RoomID != playerClaims.RoomID {
+				return fmt.Errorf("token_room_mismatch")
+			}
+			player = lockedPlayer
+
 			// The status read before this transaction is not a guarantee: a submit
 			// that passed it can still commit after finalizeRoom claimed the room,
 			// landing a score on a player row that is about to be deleted and an
@@ -1466,78 +1466,91 @@ func SubmitAnswer(c *gin.Context) {
 				return err
 			}
 			finalScore = lockedPlayer.Score
-		} else {
-			// SHARE, not UPDATE: this branch only reads the room — its status,
-			// its current question and its deadline — and never writes the row.
-			// An exclusive lock here put every answer in the room behind the
-			// same row: measured 2026-09-23 under a 2000-player burst at 24.7ms
-			// average for this one statement and 97% of all database time, with
-			// zero disk reads, so it was queueing rather than working. SHARE
-			// still blocks NextQuestion and finalizeRoom from moving the room
-			// out from under a submission in flight, which is the whole reason
-			// the lock is here, but submissions no longer block each other.
-			var lockedRoom model.Room
-			if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return fmt.Errorf("room_finished") // deleted since its fields were cached
+
+			logEntry := model.AnswerLog{
+				RoomID:         room.ID,
+				PlayerID:       lockedPlayer.ID,
+				QuestionID:     req.QuestionID,
+				SelectedOption: req.SelectedOption,
+				IsCorrect:      isCorrect,
+				PointsEarned:   pointsEarned,
+				ResponseTimeMs: responseTimeMs,
+			}
+			if err := tx.Create(&logEntry).Error; err != nil {
+				if isUniqueViolation(err) {
+					return fmt.Errorf("already_answered")
 				}
 				return err
 			}
-			// finalizeRoom nulls current_question_id in the same update that flips
-			// the status, so the check below already catches an ended room. Say it
-			// outright anyway: the player gets ROOM_FINISHED and goes to the
-			// results screen, instead of "the question is not active" for a game
-			// that no longer exists.
-			if lockedRoom.Status == "waiting" {
-				return fmt.Errorf("room_not_active")
-			}
-			if lockedRoom.Status != "active" {
-				return fmt.Errorf("room_finished")
-			}
-			if lockedRoom.CurrentQuestionID == nil || *lockedRoom.CurrentQuestionID != req.QuestionID {
-				return fmt.Errorf("question_not_active")
-			}
-			// 2s grace for client/server clock skew
-			if lockedRoom.QuestionActiveUntil == nil || receivedAt.After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
-				return fmt.Errorf("time_exceeded")
-			}
-
-			activeSince := lockedRoom.QuestionActiveUntil.UTC().Add(-time.Duration(question.Duration) * time.Second)
-			responseTimeMs = int(receivedAt.Sub(activeSince).Milliseconds())
-
-			if isCorrect {
-				timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(receivedAt)
-				totalDuration := time.Duration(question.Duration) * time.Second
-				ratio := float64(timeLeft) / float64(totalDuration)
-				if ratio < 0 {
-					ratio = 0
-				} else if ratio > 1 {
-					ratio = 1
-				}
-				pointsEarned = int(float64(question.Points) * (0.5 + 0.5*ratio))
-				lockedPlayer.Score += pointsEarned
-				if err := tx.Save(&lockedPlayer).Error; err != nil {
-					return err
-				}
-			}
-			finalScore = lockedPlayer.Score
+			return nil
 		}
 
-		logEntry := model.AnswerLog{
+		// Host-paced: everyone answers the room's current question.
+		// SHARE, not UPDATE: this branch only reads the room — its status,
+		// its current question and its deadline — and never writes the row.
+		// An exclusive lock here put every answer in the room behind the
+		// same row: measured 2026-09-23 under a 2000-player burst at 24.7ms
+		// average for this one statement and 97% of all database time, with
+		// zero disk reads, so it was queueing rather than working. SHARE
+		// still blocks NextQuestion and finalizeRoom from moving the room
+		// out from under a submission in flight, which is the whole reason
+		// the lock is here, but submissions no longer block each other.
+		var lockedRoom model.Room
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).First(&lockedRoom, room.ID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("room_finished") // deleted since its fields were cached
+			}
+			return err
+		}
+		// finalizeRoom nulls current_question_id in the same update that flips
+		// the status, so the check below already catches an ended room. Say it
+		// outright anyway: the player gets ROOM_FINISHED and goes to the
+		// results screen, instead of "the question is not active" for a game
+		// that no longer exists.
+		if lockedRoom.Status == "waiting" {
+			return fmt.Errorf("room_not_active")
+		}
+		if lockedRoom.Status != "active" {
+			return fmt.Errorf("room_finished")
+		}
+		if lockedRoom.CurrentQuestionID == nil || *lockedRoom.CurrentQuestionID != req.QuestionID {
+			return fmt.Errorf("question_not_active")
+		}
+		// 2s grace for client/server clock skew
+		if lockedRoom.QuestionActiveUntil == nil || receivedAt.After(lockedRoom.QuestionActiveUntil.UTC().Add(2*time.Second)) {
+			return fmt.Errorf("time_exceeded")
+		}
+
+		activeSince := lockedRoom.QuestionActiveUntil.UTC().Add(-time.Duration(question.Duration) * time.Second)
+		responseTimeMs = int(receivedAt.Sub(activeSince).Milliseconds())
+
+		if isCorrect {
+			timeLeft := lockedRoom.QuestionActiveUntil.UTC().Sub(receivedAt)
+			totalDuration := time.Duration(question.Duration) * time.Second
+			ratio := float64(timeLeft) / float64(totalDuration)
+			if ratio < 0 {
+				ratio = 0
+			} else if ratio > 1 {
+				ratio = 1
+			}
+			pointsEarned = int(float64(question.Points) * (0.5 + 0.5*ratio))
+		}
+
+		rec, err := recordClassicAnswer(tx, classicAnswer{
 			RoomID:         room.ID,
-			PlayerID:       lockedPlayer.ID,
+			PlayerID:       playerClaims.PlayerID,
 			QuestionID:     req.QuestionID,
 			SelectedOption: req.SelectedOption,
 			IsCorrect:      isCorrect,
 			PointsEarned:   pointsEarned,
 			ResponseTimeMs: responseTimeMs,
-		}
-		if err := tx.Create(&logEntry).Error; err != nil {
-			if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
-				return fmt.Errorf("already_answered")
-			}
+		})
+		if err != nil {
 			return err
 		}
+		player.ID = playerClaims.PlayerID
+		player.Nickname = rec.Nickname
+		finalScore = rec.Score
 		return nil
 	})
 
