@@ -227,3 +227,28 @@ func failMode(failClosed bool) string {
 	}
 	return "open (bỏ qua giới hạn, endpoint đang không được bảo vệ)"
 }
+
+// PaymentOrderRateLimit caps checkout creation: 5 per user per minute, 30 per
+// IP. Each order cancels the previous one, so a loop gains nothing but a full
+// orders table; the IP cap is generous for the same shared-NAT reason as
+// RedeemRateLimit.
+func PaymentOrderRateLimit() gin.HandlerFunc {
+	perIP := RateLimit("pay_order_ip", 30, time.Minute, true)
+	return func(c *gin.Context) {
+		perIP(c)
+		if c.IsAborted() {
+			return
+		}
+		uid, ok := c.Get("user_id")
+		if !ok {
+			c.Next()
+			return
+		}
+		id, ok := uid.(uint)
+		if !ok {
+			c.Next()
+			return
+		}
+		RateLimitKey("pay_order_user", strconv.FormatUint(uint64(id), 10), 5, time.Minute, true)(c)
+	}
+}

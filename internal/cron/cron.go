@@ -12,6 +12,7 @@ import (
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"github.com/quizzzone/backend/internal/pkg/notify"
+	"github.com/quizzzone/backend/internal/pkg/payment"
 )
 
 // StartCleanupWorker runs a background worker that cleans up abandoned rooms every hour.
@@ -257,4 +258,23 @@ func purgeOldAudit() {
 	if res.RowsAffected > 0 {
 		log.Printf("[CRON] audit retention: deleted %d row(s) older than %d days.", res.RowsAffected, days)
 	}
+}
+
+// StartPaymentExpiryWorker closes QR orders past their 30-minute TTL every five
+// minutes. GetUserOrder already reports expiry the moment it happens; this
+// makes the stored status agree for the admin list and for any transfer that
+// arrives late (matched by code, then sent to review rather than granted).
+func StartPaymentExpiryWorker() {
+	log.Println("Starting payment order expiry worker...")
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			if n, err := payment.ExpireStale(); err != nil {
+				log.Printf("[payment] expiry sweep failed: %v", err)
+			} else if n > 0 {
+				log.Printf("[payment] expired %d pending orders", n)
+			}
+		}
+	}()
 }

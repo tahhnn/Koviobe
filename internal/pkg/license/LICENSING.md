@@ -291,8 +291,42 @@ thuộc cờ này.
 đổi được link thì khách thật nhắn và chuyển tiền cho kẻ gian. Phải là URL `https://`, sai thì
 bị bỏ qua lúc khởi động (log WARNING) và nút ẩn đi.
 
-Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp), `payment_manual`
-(admin xử lý đơn QR lệch). Chưa có code nào ghi hai source này — Phase 2/3.
+Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp — Phase 3, chưa có),
+`payment_manual` (admin xác nhận tay một đơn QR).
+
+### Đơn QR (Phase 2, package `internal/pkg/payment`)
+
+Bảng `payment_orders`: snapshot gói/thời hạn/giá lúc tạo, mã `KV` + 8 ký tự (bảng chữ cái của mã
+license, không dấu gạch — ngân hàng xoá dấu). Mỗi user tối đa **một** đơn `pending` (partial
+unique index `uq_payment_orders_one_pending`, tạo lúc khởi động); tạo đơn mới huỷ đơn cũ trong
+cùng transaction. Hết hạn sau 30 phút (`OrderTTL`); `GetUserOrder` báo `expired` ngay, cron 5 phút
+ghi xuống bảng.
+
+`MarkPaidTx` là chỗ **duy nhất** biến đơn thành gói: gọi `license.GrantInTx` với `Extend: true`
+trong cùng transaction, `SourceRef` = mã đơn, `AmountVND` = tiền thật về.
+
+Checkout chỉ mở khi **cả hai**: `payment.enabled = true` và server có `PAYMENT_BANK_NAME`,
+`PAYMENT_BANK_ACCOUNT`, `SEPAY_API_KEY` (`CheckoutConfigured`). API bật công tắc từ chối khi
+thiếu cấu hình. `SEPAY_API_KEY` trên prod phải ≥ 24 ký tự.
+
+| Endpoint | Ai | Việc |
+|---|---|---|
+| `POST /api/payments/orders` | đăng nhập, 5/phút/user | `{product_id}` → đơn + thông tin CK + `qr_url`; 409 khi đóng / đã có gói vĩnh viễn |
+| `GET /api/payments/orders[/:code]` | chủ đơn | đơn của người khác trả 404 |
+| `POST /api/payments/orders/:code/cancel` | chủ đơn | chỉ khi `pending` |
+| `GET /api/admin/payments/orders` | admin | `status`/`q`/`from`/`to`, `needs_review` lên đầu |
+| `POST /api/admin/payments/orders/:code/confirm` | admin | bắt buộc `amount_vnd`, `external_ref`, `note`; mọi trạng thái trừ `paid` |
+| `POST /api/admin/payments/orders/:code/cancel` | admin | `pending`/`needs_review`/`expired` |
+| `GET/PUT /api/admin/payments/checkout` | admin | công tắc `payment.enabled` |
+
+Ảnh QR: `PAYMENT_QR_IMAGE_BASE` (mặc định `https://vietqr.app/img`, dịch vụ VietQR của SePay)
+với `acc`, `bank`, `amount`, `des` = mã đơn. Trình duyệt người mua tải ảnh trực tiếp từ đó.
+
+Test DB thật: `order_db_test.go`, chạy khi có `PAYMENT_TEST_DSN` (xem đầu file) — gồm 8 admin
+confirm đồng thời (đúng 1 lần cấp) và 6 checkout đồng thời (đúng 1 đơn pending).
+
+Không có permission `payment:confirm` riêng: `RequirePermission` cho admin qua hết, nên route
+chỉ cần `RequireRole("admin")`.
 
 ## Chưa có (tầng 3+)
 

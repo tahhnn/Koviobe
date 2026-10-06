@@ -88,6 +88,7 @@ func AutoMigrate() {
 		&model.SubscriptionEvent{},
 		&model.SystemSetting{},
 		&model.PaymentProduct{},
+		&model.PaymentOrder{},
 	)
 	if err != nil {
 		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)
@@ -178,6 +179,7 @@ func seedDefaultData() {
 
 	seedPricingPlans()
 	seedPaymentProducts()
+	ensurePaymentOrderIndexes()
 	backfillFreeSubscriptions()
 	seedFixedAdmin(adminRole)
 	promoteAdminEmails(adminRole)
@@ -388,6 +390,18 @@ func seedPaymentProducts() {
 		} else if res.RowsAffected > 0 {
 			log.Printf("Seeded payment product: %s (inactive)", p.ID)
 		}
+	}
+}
+
+// ensurePaymentOrderIndexes adds what GORM tags cannot express: at most one
+// pending order per user. Creating a new checkout cancels the old one in the
+// same transaction, so this only bites two checkouts racing — and then the
+// loser fails instead of leaving the host with two live QR codes for one
+// purchase. Idempotent.
+func ensurePaymentOrderIndexes() {
+	if err := DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_orders_one_pending
+		ON payment_orders (user_id) WHERE status = 'pending'`).Error; err != nil {
+		log.Printf("Failed to create uq_payment_orders_one_pending: %v", err)
 	}
 }
 

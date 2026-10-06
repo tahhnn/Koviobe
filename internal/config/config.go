@@ -86,6 +86,17 @@ type Config struct {
 	// point at someone else's Zalo, taking real customers' money. Must be an
 	// https URL; anything else is dropped at load and the button is hidden.
 	PaymentZaloURL string
+
+	// Bank account that receives QR checkout transfers. Env, not a setting, for
+	// the same reason as PaymentZaloURL: whoever can change it receives the money.
+	PaymentBankName    string // bank name/code SePay's QR accepts, e.g. Vietcombank
+	PaymentBankAccount string
+	PaymentBankHolder  string
+	// PaymentQRImageBase renders the VietQR image (SePay: https://vietqr.app/img).
+	PaymentQRImageBase string
+	// SePayAPIKey authenticates SePay's webhook ("Authorization: Apikey <key>").
+	// Never returned by any endpoint.
+	SePayAPIKey string
 }
 
 var AppConfig *Config
@@ -149,7 +160,12 @@ func LoadConfig() {
 		TelegramDigestHour:   getEnvInt("TELEGRAM_DIGEST_HOUR", 8),
 		TelegramAdminIDs:     getEnv("TELEGRAM_ADMIN_IDS", ""),
 
-		PaymentZaloURL: httpsURLOrEmpty("PAYMENT_ZALO_URL", getEnv("PAYMENT_ZALO_URL", "")),
+		PaymentZaloURL:     httpsURLOrEmpty("PAYMENT_ZALO_URL", getEnv("PAYMENT_ZALO_URL", "")),
+		PaymentBankName:    strings.TrimSpace(getEnv("PAYMENT_BANK_NAME", "")),
+		PaymentBankAccount: strings.TrimSpace(getEnv("PAYMENT_BANK_ACCOUNT", "")),
+		PaymentBankHolder:  strings.TrimSpace(getEnv("PAYMENT_BANK_HOLDER", "")),
+		PaymentQRImageBase: httpsURLOrEmpty("PAYMENT_QR_IMAGE_BASE", getEnv("PAYMENT_QR_IMAGE_BASE", "https://vietqr.app/img")),
+		SePayAPIKey:        strings.TrimSpace(getEnv("SEPAY_API_KEY", "")),
 	}
 
 	validateSecurityConfig(AppConfig)
@@ -181,6 +197,13 @@ func validateSecurityConfig(cfg *Config) {
 	validateSecret("CENTRIFUGO_API_KEY", cfg.CentrifugoAPIKey, 32)
 	validateSecret("DB_PASSWORD", cfg.DBPassword, 16)
 	validateSecret("REDIS_PASSWORD", cfg.RedisPassword, 16)
+
+	// Optional until QR checkout goes live, but a key that is set must be one
+	// nobody can guess — it is the only thing standing between the internet
+	// and "mark this order paid".
+	if cfg.SePayAPIKey != "" {
+		validateSecret("SEPAY_API_KEY", cfg.SePayAPIKey, 24)
+	}
 
 	if (cfg.SMTPEmail == "") != (cfg.SMTPPassword == "") {
 		log.Fatal("FATAL: SMTP_EMAIL and SMTP_PASSWORD must either both be set or both be empty")
