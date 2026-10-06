@@ -143,6 +143,9 @@ var vi = map[string]string{
 	"Bank transaction is already handled":                      "Giao dịch này đã được xử lý",
 	"A note is required":                                       "Cần nhập ghi chú / lý do",
 	"Invalid transaction ID":                                   "ID giao dịch không hợp lệ",
+	"days must be between 1 and 30":                            "Số ngày phải từ 1 đến 30",
+	"SePay API token is not configured":                        "Máy chủ chưa cấu hình SEPAY_API_TOKEN",
+	"SePay reconciliation failed":                              "Đối soát SePay thất bại, thử lại sau",
 
 	// Admin guards
 	"Cannot demote the last admin":                      "Không thể hạ quyền quản trị viên cuối cùng",

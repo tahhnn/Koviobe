@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"context"
+	"encoding/csv"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -336,4 +339,98 @@ func AdminSetCheckout(c *gin.Context) {
 		"is_active": req.Enabled,
 	})
 	c.JSON(http.StatusOK, checkoutState())
+}
+
+// AdminReconcilePayments runs SePay reconciliation now over the last `days`
+// (1-30, default 2) — after fixing a broken webhook, or before closing a month.
+func AdminReconcilePayments(c *gin.Context) {
+	var req struct {
+		Days int `json:"days"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.Days <= 0 {
+		req.Days = 2
+	}
+	if req.Days > 30 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "days must be between 1 and 30"})
+		return
+	}
+	if !payment.ReconcileConfigured() {
+		c.JSON(http.StatusConflict, gin.H{"error": payment.ErrReconcileNotConfigured.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
+	defer cancel()
+	res, err := payment.Reconcile(ctx, time.Now().AddDate(0, 0, -req.Days), payment.AfterApplied)
+	if err != nil {
+		log.Printf("[payment] manual reconcile failed: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "SePay reconciliation failed", "result": res})
+		return
+	}
+	adminID := c.GetUint("user_id")
+	audit.Log(c, adminID, "admin_payment_reconcile", "sepay", map[string]any{
+		"count": res.New, "rows": res.Fetched,
+	})
+	c.JSON(http.StatusOK, gin.H{"result": res, "configured": true})
+}
+
+// AdminExportPaymentOrders streams orders as CSV for reconciliation. Same
+// filters as the list; 5000 rows by default rather than the screen's 200.
+func AdminExportPaymentOrders(c *gin.Context) {
+	f := payment.AdminOrderFilter{Status: c.Query("status"), Q: c.Query("q"), Limit: 5000}
+	if v := c.Query("from"); v != "" {
+		t, err := time.ParseInLocation("2006-01-02", v, time.Local)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid from date"})
+			return
+		}
+		f.From = &t
+	}
+	if v := c.Query("to"); v != "" {
+		t, err := time.ParseInLocation("2006-01-02", v, time.Local)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid to date"})
+			return
+		}
+		t = t.AddDate(0, 0, 1)
+		f.To = &t
+	}
+	rows, err := payment.ListAdminOrders(f)
+	if err != nil {
+		paymentError(c, err)
+		return
+	}
+
+	adminID := c.GetUint("user_id")
+	audit.Log(c, adminID, "admin_payment_orders_export", "payment_orders", map[string]any{
+		"rows": len(rows), "format": "csv",
+	})
+
+	filename := fmt.Sprintf("payment-orders-%s.csv", time.Now().Format("20060102-150405"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="`+filename+`"`)
+	// UTF-8 BOM so Excel on Windows reads Vietnamese correctly.
+	_, _ = c.Writer.WriteString("\ufeff")
+	w := csv.NewWriter(c.Writer)
+	defer w.Flush()
+	_ = w.Write([]string{
+		"created_at", "order_code", "user_id", "email", "product_id", "product_name", "plan_id",
+		"duration_days", "amount_vnd", "status", "review_reason", "paid_at", "paid_amount_vnd",
+		"external_ref", "confirmed_by", "note",
+	})
+	for _, o := range rows {
+		paidAt, confirmedBy := "", ""
+		if o.PaidAt != nil {
+			paidAt = o.PaidAt.Format(time.RFC3339)
+		}
+		if o.ConfirmedBy != nil {
+			confirmedBy = strconv.FormatUint(uint64(*o.ConfirmedBy), 10)
+		}
+		_ = w.Write([]string{
+			o.CreatedAt.Format(time.RFC3339), o.OrderCode, strconv.FormatUint(uint64(o.UserID), 10),
+			csvSafe(o.Email), o.ProductID, csvSafe(o.ProductName), o.PlanID,
+			strconv.Itoa(o.DurationDays), strconv.Itoa(o.AmountVND), o.Status, o.ReviewReason,
+			paidAt, strconv.Itoa(o.PaidAmountVND), csvSafe(o.ExternalRef), confirmedBy, csvSafe(o.Note),
+		})
+	}
 }

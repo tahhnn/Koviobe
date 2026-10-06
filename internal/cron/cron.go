@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sort"
@@ -277,4 +278,45 @@ func StartPaymentExpiryWorker() {
 			}
 		}
 	}()
+}
+
+// StartPaymentReconcileWorker pulls SePay's transaction list hourly (48 h
+// window) and records any incoming transfer whose webhook never arrived.
+// Idle without SEPAY_API_TOKEN. A run that finds anything new is itself an
+// alert: it means webhooks are being lost.
+func StartPaymentReconcileWorker() {
+	if !payment.ReconcileConfigured() {
+		log.Println("Payment reconcile worker disabled (SEPAY_API_TOKEN or PAYMENT_BANK_ACCOUNT not set)")
+		return
+	}
+	log.Println("Starting payment reconcile worker...")
+	go func() {
+		time.Sleep(2 * time.Minute)
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			RunPaymentReconcile(48 * time.Hour)
+			<-ticker.C
+		}
+	}()
+}
+
+// RunPaymentReconcile performs one reconciliation over the given window.
+func RunPaymentReconcile(window time.Duration) (payment.ReconcileResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	res, err := payment.Reconcile(ctx, time.Now().Add(-window), payment.AfterApplied)
+	if err != nil {
+		log.Printf("[payment] reconcile failed: %v", err)
+		notify.P1("sepay-reconcile-failed", "Đối soát SePay thất bại: %v", err)
+		return res, err
+	}
+	if res.New > 0 {
+		notify.P1("sepay-reconcile-recovered",
+			"Đối soát SePay vớt %d giao dịch webhook bị lỡ (%d đã kích hoạt, %d cần xử lý) — kiểm tra webhook SePay",
+			res.New, res.Paid, res.NeedHuman)
+	}
+	log.Printf("[payment] reconcile: fetched=%d new=%d paid=%d review=%d skipped=%d",
+		res.Fetched, res.New, res.Paid, res.NeedHuman, res.Skipped)
+	return res, nil
 }

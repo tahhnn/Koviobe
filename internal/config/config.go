@@ -100,6 +100,11 @@ type Config struct {
 	// SePayIPAllowlist: comma-separated addresses the webhook accepts. Empty
 	// skips the check (dev); the API key is still required either way.
 	SePayIPAllowlist []string
+	// SePayAPIToken (Bearer) lets the hourly reconciliation read SePay's
+	// transaction list and recover transfers whose webhook never arrived.
+	// Different from SePayAPIKey, which SePay sends to us. Empty disables it.
+	SePayAPIToken string
+	SePayAPIBase  string
 }
 
 var AppConfig *Config
@@ -170,6 +175,8 @@ func LoadConfig() {
 		PaymentQRImageBase: httpsURLOrEmpty("PAYMENT_QR_IMAGE_BASE", getEnv("PAYMENT_QR_IMAGE_BASE", "https://vietqr.app/img")),
 		SePayAPIKey:        strings.TrimSpace(getEnv("SEPAY_API_KEY", "")),
 		SePayIPAllowlist:   splitList(getEnv("SEPAY_IP_ALLOWLIST", "")),
+		SePayAPIToken:      strings.TrimSpace(getEnv("SEPAY_API_TOKEN", "")),
+		SePayAPIBase:       httpsURLOrEmpty("SEPAY_API_BASE", getEnv("SEPAY_API_BASE", "https://my.sepay.vn/userapi")),
 	}
 
 	validateSecurityConfig(AppConfig)

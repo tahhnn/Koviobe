@@ -67,12 +67,7 @@ func SePayWebhook(c *gin.Context) {
 	}
 
 	log.Printf("[sepay] %s", payment.Describe(t, out))
-	if out.Paid && out.Order != nil {
-		go payment.SendReceipt(out.Order.ID)
-	}
-	if out.NeedsHuman() {
-		notify.P1("sepay-review-"+t.ProviderTxnID, "Cần xử lý thanh toán: %s", payment.Describe(t, out))
-	}
+	payment.AfterApplied(t, out)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 

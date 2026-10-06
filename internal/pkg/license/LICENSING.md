@@ -378,10 +378,31 @@ Admin:
 Sai tiền / trả trễ không nằm trong hàng chờ giao dịch mà nằm trên **đơn** (`needs_review`),
 xử lý bằng `orders/:code/confirm` hoặc `cancel`.
 
-## Chưa có (tầng 3+)
+### Đối soát + xuất CSV (Phase 4)
 
-- Cron đối soát kéo lịch sử giao dịch từ API SePay để vớt webhook mất quá 5 giờ retry.
-- Export CSV đơn thanh toán.
+**Đối soát SePay** (`payment.Reconcile`): gọi `GET {SEPAY_API_BASE}/transactions/list`
+(mặc định `https://my.sepay.vn/userapi`, `Authorization: Bearer SEPAY_API_TOKEN`) lọc theo
+`account_number` + `transaction_date_min`, rồi đẩy từng giao dịch **tiền vào** qua đúng
+`ApplySePay` như webhook. Bỏ qua giao dịch < 15 phút (để webhook xử lý).
+
+- Cron mỗi giờ, cửa sổ 48 giờ (`StartPaymentReconcileWorker`); tắt khi thiếu `SEPAY_API_TOKEN`.
+- Có giao dịch được vớt = webhook đang bị lỡ → Telegram P1. Gọi API lỗi → P1.
+- Admin bấm tay: `POST /api/admin/payments/reconcile {days: 1..30}`.
+
+Chống ghi trùng: ngoài unique theo id SePay, `ApplySePay` bỏ qua giao dịch có **cùng mã tham
+chiếu ngân hàng + số tiền + STK** đã có trong sổ (`knownReference`). Lý do: chưa xác minh được id
+trong webhook và id trong API list có luôn trùng nhau không; nếu khác, không có lớp này một khoản
+tiền sẽ bị ghi hai lần và bị báo nhầm là "chuyển trùng".
+
+API list có thể trả số dạng `"2000.00"` — `flexInt` nhận cả số, chuỗi số và chuỗi thập phân.
+
+**Xuất CSV đơn**: `GET /api/admin/payments/orders.csv` (cùng bộ lọc với danh sách, 5000 dòng, BOM
+UTF-8, chặn formula injection bằng `csvSafe`), có audit `admin_payment_orders_export`.
+
+## Chưa có
+
+- Hoá đơn VAT / hoá đơn điện tử.
+- Hoàn tiền trong app — hoàn tiền làm ngoài app, rồi "đánh dấu đã xử lý" giao dịch trùng.
 - Không tự khớp sao kê ngân hàng. `summary` là số hệ thống ghi nhận, phải đối chiếu tay.
 - Không xuất hoá đơn / VAT.
 - Không nhắc hạn trước khi gói sắp hết — host bị cắt mà không được báo trước.

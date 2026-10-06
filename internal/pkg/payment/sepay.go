@@ -14,6 +14,7 @@ import (
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/license"
+	"github.com/quizzzone/backend/internal/pkg/notify"
 )
 
 // ProviderSePay names SePay in bank_transactions.provider.
@@ -103,6 +104,13 @@ func (o Outcome) NeedsHuman() bool {
 // Idempotent on the SePay id: a retried or replayed webhook is a no-op.
 func ApplySePay(t *model.BankTransaction) (Outcome, error) {
 	var out Outcome
+	// The same bank transfer under a different SePay id (webhook vs list API)
+	// is still the same money; recording it twice would flag the buyer's one
+	// payment as a duplicate.
+	if knownReference(t) {
+		out.Duplicate = true
+		return out, nil
+	}
 	err := db.DB.Transaction(func(tx *gorm.DB) error {
 		t.MatchStatus = model.TxnUnmatched
 		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(t)
@@ -332,4 +340,19 @@ func Describe(t *model.BankTransaction, out Outcome) string {
 		code = "—"
 	}
 	return fmt.Sprintf("SePay #%s %s %dđ, đơn %s, nội dung %q", t.ProviderTxnID, out.Status, t.AmountVND, code, clip(t.Content, 120))
+}
+
+// AfterApplied runs the side effects of a newly recorded transfer, after its
+// transaction committed: the buyer's receipt and the admin alert. Shared by
+// the webhook and reconciliation so both tell people the same things.
+func AfterApplied(t *model.BankTransaction, out Outcome) {
+	if out.Duplicate {
+		return
+	}
+	if out.Paid && out.Order != nil {
+		go SendReceipt(out.Order.ID)
+	}
+	if out.NeedsHuman() {
+		notify.P1("sepay-review-"+t.ProviderTxnID, "Cần xử lý thanh toán: %s", Describe(t, out))
+	}
 }

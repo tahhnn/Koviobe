@@ -58,6 +58,7 @@ func main() {
 	cron.StartDigestWorker()
 	cron.StartAuditRetentionWorker()
 	cron.StartPaymentExpiryWorker()
+	cron.StartPaymentReconcileWorker()
 	// Read-only command bot. Started after the services it reports on, so
 	// /status never answers about a half-initialised process.
 	telegrambot.Start(telegrambot.Config{
@@ -197,6 +198,8 @@ func main() {
 				adminPayments.GET("/products", handler.AdminListPaymentProducts)
 				adminPayments.PUT("/products/:id", handler.AdminUpdatePaymentProduct)
 				adminPayments.GET("/orders", handler.AdminListPaymentOrders)
+				adminPayments.GET("/orders.csv", handler.AdminExportPaymentOrders)
+				adminPayments.POST("/reconcile", handler.AdminReconcilePayments)
 				adminPayments.POST("/orders/:code/confirm", handler.AdminConfirmPaymentOrder)
 				adminPayments.POST("/orders/:code/cancel", handler.AdminCancelPaymentOrder)
 				adminPayments.GET("/bank-transactions", handler.AdminListBankTransactions)
