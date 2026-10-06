@@ -116,6 +116,16 @@ var vi = map[string]string{
 	"Failed to save enforcement setting":                       "Không lưu được cài đặt enforcement",
 	"Failed to claw back the code":                             "Không thu hồi được mã",
 	"License code not found":                                   "Không tìm thấy mã kích hoạt",
+	"amount_vnd must not be negative":                          "Số tiền không được âm",
+	"external_ref is required when amount_vnd is set":          "Có số tiền thì phải nhập mã tham chiếu thanh toán",
+
+	// Payments
+	"Failed to load products":                                  "Không tải được bảng giá",
+	"Product not found":                                        "Không tìm thấy gói bán",
+	"Product name must be 1-100 characters":                    "Tên gói phải từ 1 đến 100 ký tự",
+	"duration_days must be between 1 and 3660":                 "Thời hạn phải từ 1 đến 3660 ngày",
+	"amount_vnd must be at least 1000":                         "Giá phải từ 1.000đ trở lên",
+	"Failed to update product":                                 "Không cập nhật được gói bán",
 
 	// Admin guards
 	"Cannot demote the last admin":                      "Không thể hạ quyền quản trị viên cuối cùng",

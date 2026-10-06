@@ -125,6 +125,8 @@ func main() {
 
 		// Public plan catalog
 		api.GET("/license/plans", handler.ListPlans)
+		// Public price list + how to reach a person to buy (Zalo).
+		api.GET("/payments/products", handler.ListPaymentProducts)
 
 		// Realtime tokens — require host JWT or player JWT (no open public minting)
 		api.GET("/realtime/token", handler.GetRealtimeToken)
@@ -176,6 +178,13 @@ func main() {
 				adminLicense.GET("/history.csv", handler.AdminExportSubscriptionHistory)
 				adminLicense.GET("/enforcement", handler.AdminGetEnforcement)
 				adminLicense.PUT("/enforcement", handler.AdminSetEnforcement)
+			}
+
+			adminPayments := private.Group("/admin/payments")
+			adminPayments.Use(middleware.RequireRole("admin"))
+			{
+				adminPayments.GET("/products", handler.AdminListPaymentProducts)
+				adminPayments.PUT("/products/:id", handler.AdminUpdatePaymentProduct)
 			}
 
 			adminUsers := private.Group("/admin/users")

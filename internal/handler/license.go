@@ -229,6 +229,8 @@ func AdminUpdatePlan(c *gin.Context) {
 //	{ "user_id": 1, "plan_id": "pro", "ends_at_days": 30 }  // timed Pro
 //	{ "user_id": 1, "plan_id": "pro", "lifetime": true }    // Pro no expiry
 //	{ "user_id": 1, "plan_id": "free" }                     // revoke to Free
+//	{ "user_id": 1, "plan_id": "pro", "ends_at_days": 30, "extend": true,
+//	  "amount_vnd": 199000, "external_ref": "VCB FT24..." } // paid renewal, stacked
 func AdminAssignPlan(c *gin.Context) {
 	var req struct {
 		UserID      uint   `json:"user_id" binding:"required"`
@@ -242,13 +244,28 @@ func AdminAssignPlan(c *gin.Context) {
 		// only when plan_id is "free"; false by default so every existing caller
 		// behaves exactly as before.
 		CloseRooms bool `json:"close_rooms"`
+		// Extend adds the term to the unexpired remainder of the same plan
+		// instead of restarting it. False by default so existing callers keep
+		// their behaviour.
+		Extend bool `json:"extend"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.ExternalRef = strings.TrimSpace(req.ExternalRef)
+	if req.AmountVND < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount_vnd must not be negative"})
+		return
+	}
+	// Money recorded without a reference cannot be found on a bank statement,
+	// which makes the amount worse than useless for reconciliation.
+	if req.AmountVND > 0 && req.ExternalRef == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "external_ref is required when amount_vnd is set"})
+		return
+	}
 
-	opts := license.AssignOptions{}
+	opts := license.AssignOptions{Extend: req.Extend}
 	if req.PlanID == license.PlanFree {
 		opts.EndsAtDays = nil
 	} else if req.Lifetime {
@@ -277,7 +294,7 @@ func AdminAssignPlan(c *gin.Context) {
 	sub, err := license.AdminSetPlanWithContext(req.UserID, req.PlanID, opts, license.GrantContext{
 		Source:      license.SourceAdminAssign,
 		AmountVND:   req.AmountVND,
-		ExternalRef: strings.TrimSpace(req.ExternalRef),
+		ExternalRef: req.ExternalRef,
 		ActorUserID: adminID.(uint),
 		Note:        strings.TrimSpace(req.Note),
 		IPAddress:   c.ClientIP(),

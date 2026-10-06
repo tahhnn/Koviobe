@@ -14,7 +14,7 @@ Còn phải làm trước khi bật — xem "Quy trình bật enforcement" bên 
 - [x] `03_fix_code_duration_default.sql`
 - [x] `04_fix_questions_per_quiz_default.sql`
 
-Thanh toán **không chạy trên app** — khách trả qua trung gian (chuyển khoản, đại lý), admin đúc mã hoặc gán gói sau khi tiền về. Hệ thống ghi lại số tiền + mã tham chiếu để đối soát với sao kê, không tự xác nhận thanh toán.
+Thanh toán: hiện vẫn **ngoài app** — khách liên hệ qua Zalo (link `PAYMENT_ZALO_URL`, trả ở `GET /api/payments/products`), trả tiền, admin gán gói (ghi `amount_vnd` + `external_ref`) hoặc đúc mã. QR tự động qua SePay đang làm theo plan `/root/plans/2026-10-06-payment-sepay-zalo.md` — xem mục "Thanh toán" cuối file.
 
 ## Kill switch
 
@@ -253,9 +253,50 @@ trận của ai.
 Package `license` không tự đóng phòng: archive là việc của package `handler`, kéo vào đây
 là đảo ngược phụ thuộc. Nó trả id, cron gọi handler.
 
+## Thanh toán (2026-10-06, Phase 1)
+
+Quyết định "cố ý không làm cổng thanh toán" đã được đảo: QR tự động qua SePay, còn mua trực tiếp
+thì app **chỉ hiện link Zalo** — không có đơn hàng, admin cấp gói bằng công cụ có sẵn.
+
+**Cộng dồn hạn (`AssignOptions.Extend`).** Trước đây mọi lần cấp gói đặt `StartsAt = now`,
+`EndsAt = now + N`: khách còn 10 ngày mà gia hạn sớm thì mất 10 ngày. `computeTerm` (thuần,
+có test `term_test.go`) giờ quyết định ngày:
+
+- `Extend` + cùng gói + chưa hết hạn → `EndsAt = EndsAt cũ + N`, giữ `StartsAt` cũ.
+- `Extend` + cùng gói đang **vĩnh viễn** → vẫn vĩnh viễn. Mua 30 ngày không bao giờ được rút
+  ngắn một gói vĩnh viễn.
+- Hết hạn rồi (kể cả chưa bị cron hạ), khác gói, hoặc không `Extend` → `now + N` như cũ.
+
+`Extend` mặc định `false`: API cũ giữ nguyên hành vi. `POST /api/admin/license/assign` nhận
+`"extend": true`; UI tab Subscriptions tự tick khi user đang có Pro còn hạn và hiện "hạn mới"
+trước khi bấm. **Chưa** bật cho `RedeemCode` — chờ quyết định.
+
+**Có tiền thì phải có mã tham chiếu.** `assign` trả 400 khi `amount_vnd > 0` mà
+`external_ref` rỗng, và từ chối `amount_vnd < 0`.
+
+**Bảng `payment_products`** — SKU bán theo thời hạn (`pro_1m`, `pro_3m`, `pro_12m`). Seed
+**tắt** (`is_active = false`), giá seed chỉ là nháp = 199.000đ × số tháng; admin phải duyệt giá
+rồi bật. Không cột nào có `default` (bẫy GORM ở trên).
+
+| Endpoint | Ai | Việc |
+|---|---|---|
+| `GET /api/payments/products` | public | SKU đang bán + `payment_enabled` + `contact.zalo_url` |
+| `GET /api/admin/payments/products` | admin | mọi SKU |
+| `PUT /api/admin/payments/products/:id` | admin | sửa tên / thời hạn (1–3660 ngày) / giá (≥ 1.000đ) / bật tắt; audit `admin_payment_product_update` |
+
+`payment.enabled` (system_settings, mặc định tắt) chỉ chặn checkout QR. Link Zalo không phụ
+thuộc cờ này.
+
+`PAYMENT_ZALO_URL` là **env, không phải setting admin sửa được**: một phiên admin bị chiếm mà
+đổi được link thì khách thật nhắn và chuyển tiền cho kẻ gian. Phải là URL `https://`, sai thì
+bị bỏ qua lúc khởi động (log WARNING) và nút ẩn đi.
+
+Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp), `payment_manual`
+(admin xử lý đơn QR lệch). Chưa có code nào ghi hai source này — Phase 2/3.
+
 ## Chưa có (tầng 3+)
 
-- Cổng thanh toán tự động — **cố ý không làm**. Thanh toán qua trung gian, ngoài app.
+- Đơn hàng + webhook SePay (Phase 2–3 của plan thanh toán).
 - Không tự khớp sao kê ngân hàng. `summary` là số hệ thống ghi nhận, phải đối chiếu tay.
 - Không xuất hoá đơn / VAT.
 - Không nhắc hạn trước khi gói sắp hết — host bị cắt mà không được báo trước.

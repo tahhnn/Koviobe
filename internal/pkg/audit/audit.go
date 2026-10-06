@@ -21,7 +21,8 @@ var allowedMetaKeys = map[string]bool{
 	"player_count": true, "question_count": true, "reason": true,
 	"email": true, "target_user_id": true, "role": true, "plan_id": true,
 	"is_active": true, "count": true, "rows": true, "format": true,
-	"filters": true,
+	"filters":    true,
+	"product_id": true, "amount_vnd": true, "duration_days": true,
 }
 
 // Entry is one audit row before it is written.
