@@ -138,7 +138,12 @@ func paymentError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, payment.ErrOrderNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, payment.ErrProductUnavailable), errors.Is(err, payment.ErrConfirmFields):
+	case errors.Is(err, payment.ErrTxnNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, payment.ErrTxnNotOpen):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, payment.ErrProductUnavailable), errors.Is(err, payment.ErrConfirmFields),
+		errors.Is(err, payment.ErrTxnNoteMissing):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, payment.ErrCheckoutClosed), errors.Is(err, payment.ErrLifetimePlan),
 		errors.Is(err, payment.ErrOrderNotPending), errors.Is(err, payment.ErrOrderAlreadyPaid),

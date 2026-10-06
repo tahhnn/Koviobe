@@ -128,6 +128,9 @@ func main() {
 		api.GET("/license/plans", handler.ListPlans)
 		// Public price list + how to reach a person to buy (Zalo).
 		api.GET("/payments/products", handler.ListPaymentProducts)
+		// SePay bank-transfer webhook. No user auth: SePay authenticates with
+		// "Authorization: Apikey <SEPAY_API_KEY>", checked in the handler.
+		api.POST("/payments/webhook/sepay", middleware.SePayWebhookGuard(), handler.SePayWebhook)
 
 		// Realtime tokens — require host JWT or player JWT (no open public minting)
 		api.GET("/realtime/token", handler.GetRealtimeToken)
@@ -196,6 +199,9 @@ func main() {
 				adminPayments.GET("/orders", handler.AdminListPaymentOrders)
 				adminPayments.POST("/orders/:code/confirm", handler.AdminConfirmPaymentOrder)
 				adminPayments.POST("/orders/:code/cancel", handler.AdminCancelPaymentOrder)
+				adminPayments.GET("/bank-transactions", handler.AdminListBankTransactions)
+				adminPayments.POST("/bank-transactions/:id/attach", handler.AdminAttachBankTransaction)
+				adminPayments.POST("/bank-transactions/:id/dismiss", handler.AdminDismissBankTransaction)
 				adminPayments.GET("/checkout", handler.AdminGetCheckout)
 				adminPayments.PUT("/checkout", handler.AdminSetCheckout)
 			}

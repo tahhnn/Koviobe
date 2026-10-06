@@ -97,6 +97,9 @@ type Config struct {
 	// SePayAPIKey authenticates SePay's webhook ("Authorization: Apikey <key>").
 	// Never returned by any endpoint.
 	SePayAPIKey string
+	// SePayIPAllowlist: comma-separated addresses the webhook accepts. Empty
+	// skips the check (dev); the API key is still required either way.
+	SePayIPAllowlist []string
 }
 
 var AppConfig *Config
@@ -166,9 +169,21 @@ func LoadConfig() {
 		PaymentBankHolder:  strings.TrimSpace(getEnv("PAYMENT_BANK_HOLDER", "")),
 		PaymentQRImageBase: httpsURLOrEmpty("PAYMENT_QR_IMAGE_BASE", getEnv("PAYMENT_QR_IMAGE_BASE", "https://vietqr.app/img")),
 		SePayAPIKey:        strings.TrimSpace(getEnv("SEPAY_API_KEY", "")),
+		SePayIPAllowlist:   splitList(getEnv("SEPAY_IP_ALLOWLIST", "")),
 	}
 
 	validateSecurityConfig(AppConfig)
+}
+
+// splitList parses a comma-separated env value, dropping blanks.
+func splitList(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // httpsURLOrEmpty keeps raw only when it is an absolute https URL. A typo in a

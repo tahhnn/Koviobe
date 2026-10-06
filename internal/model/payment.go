@@ -60,3 +60,41 @@ type PaymentOrder struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }
+
+// Bank transaction match outcomes.
+const (
+	TxnMatched          = "matched"           // paid an order automatically
+	TxnUnmatched        = "unmatched"         // no order code found — a human must place it
+	TxnAmountMismatch   = "amount_mismatch"   // order found, wrong amount; order sent to review
+	TxnDuplicatePayment = "duplicate_payment" // order was already paid; likely a refund
+	TxnNeedsReview      = "needs_review"      // order was already under review
+	TxnIgnored          = "ignored"           // outgoing, or another account
+	TxnDismissed        = "dismissed"         // admin: not a checkout payment
+	TxnAttached         = "attached"          // admin placed it on an order by hand
+)
+
+// BankTransaction is the raw ledger of every transfer SePay reports, matched
+// or not. Money that exists only in SePay's dashboard is a customer who paid
+// and got nothing; keeping every row here is what makes that visible.
+type BankTransaction struct {
+	ID              uint      `gorm:"primaryKey" json:"id"`
+	Provider        string    `gorm:"size:20;not null;uniqueIndex:uq_bank_txn_provider" json:"provider"`
+	ProviderTxnID   string    `gorm:"size:64;not null;uniqueIndex:uq_bank_txn_provider" json:"provider_txn_id"`
+	Gateway         string    `gorm:"size:50" json:"gateway"`
+	AccountNumber   string    `gorm:"size:50" json:"account_number"`
+	TransferType    string    `gorm:"size:8;not null" json:"transfer_type"`
+	DetectedCode    string    `gorm:"size:32" json:"detected_code,omitempty"`
+	AmountVND       int64     `gorm:"not null" json:"amount_vnd"`
+	Content         string    `gorm:"size:500" json:"content"`
+	Description     string    `gorm:"size:500" json:"description,omitempty"`
+	ReferenceCode   string    `gorm:"size:64;index" json:"reference_code"`
+	TransactionDate time.Time `json:"transaction_date"`
+	OrderCode       string    `gorm:"size:16;index" json:"order_code,omitempty"`
+	OrderID         *uint     `gorm:"index" json:"order_id,omitempty"`
+	MatchStatus     string    `gorm:"size:24;not null;index" json:"match_status"`
+	Note            string    `gorm:"size:255" json:"note,omitempty"`
+	HandledBy       *uint     `json:"handled_by,omitempty"`
+	RawPayload      string    `gorm:"type:jsonb" json:"-"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}

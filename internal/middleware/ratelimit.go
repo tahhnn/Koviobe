@@ -252,3 +252,36 @@ func PaymentOrderRateLimit() gin.HandlerFunc {
 		RateLimitKey("pay_order_user", strconv.FormatUint(uint64(id), 10), 5, time.Minute, true)(c)
 	}
 }
+
+// SePayWebhookGuard admits only SePay's servers (SEPAY_IP_ALLOWLIST, when set)
+// and caps the rate per address. The API key in the handler is the real
+// authentication; the allowlist keeps a leaked key from being usable from
+// anywhere else.
+//
+// The rate limit fails open: when Redis is down a refused webhook becomes a
+// SePay retry, but after five hours of retries a real payment would be lost,
+// and the API key still stands in front of every request.
+func SePayWebhookGuard() gin.HandlerFunc {
+	perIP := RateLimit("sepay_ip", 120, time.Minute, false)
+	return func(c *gin.Context) {
+		var allow []string
+		if config.AppConfig != nil {
+			allow = config.AppConfig.SePayIPAllowlist
+		}
+		if len(allow) > 0 {
+			ip := c.ClientIP()
+			ok := false
+			for _, a := range allow {
+				if a == ip {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false})
+				return
+			}
+		}
+		perIP(c)
+	}
+}

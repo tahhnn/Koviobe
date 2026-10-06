@@ -89,6 +89,7 @@ func AutoMigrate() {
 		&model.SystemSetting{},
 		&model.PaymentProduct{},
 		&model.PaymentOrder{},
+		&model.BankTransaction{},
 	)
 	if err != nil {
 		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)

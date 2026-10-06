@@ -139,6 +139,10 @@ var vi = map[string]string{
 	"Failed to save checkout setting":                          "Không lưu được cài đặt thanh toán",
 	"Invalid from date":                                        "Ngày bắt đầu không hợp lệ",
 	"Invalid to date":                                          "Ngày kết thúc không hợp lệ",
+	"Bank transaction not found":                               "Không tìm thấy giao dịch ngân hàng",
+	"Bank transaction is already handled":                      "Giao dịch này đã được xử lý",
+	"A note is required":                                       "Cần nhập ghi chú / lý do",
+	"Invalid transaction ID":                                   "ID giao dịch không hợp lệ",
 
 	// Admin guards
 	"Cannot demote the last admin":                      "Không thể hạ quyền quản trị viên cuối cùng",

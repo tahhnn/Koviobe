@@ -291,7 +291,7 @@ thuộc cờ này.
 đổi được link thì khách thật nhắn và chuyển tiền cho kẻ gian. Phải là URL `https://`, sai thì
 bị bỏ qua lúc khởi động (log WARNING) và nút ẩn đi.
 
-Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp — Phase 3, chưa có),
+Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp),
 `payment_manual` (admin xác nhận tay một đơn QR).
 
 ### Đơn QR (Phase 2, package `internal/pkg/payment`)
@@ -328,9 +328,60 @@ confirm đồng thời (đúng 1 lần cấp) và 6 checkout đồng thời (đ�
 Không có permission `payment:confirm` riêng: `RequirePermission` cho admin qua hết, nên route
 chỉ cần `RequireRole("admin")`.
 
+### Webhook SePay (Phase 3)
+
+`POST /api/payments/webhook/sepay` — không qua auth user; SePay gửi
+`Authorization: Apikey <SEPAY_API_KEY>`, so sánh constant-time. Không cấu hình key = mọi request
+401. `SEPAY_IP_ALLOWLIST` (danh sách IP SePay công bố, cách nhau dấu phẩy) chặn thêm theo
+`ClientIP()`; để trống thì bỏ kiểm IP. Rate limit 120/phút/IP, **fail-open** khi Redis lỗi:
+từ chối webhook chỉ khiến SePay retry, nhưng quá 5 giờ retry là mất một khoản tiền thật.
+
+Hợp đồng phản hồi của SePay: 200 + `{"success": true}` trong 30 s, nếu không nó retry tối đa 7
+lần / 5 giờ. Nên mọi kết quả nghiệp vụ (không có mã, sai tiền, tiền ra, trùng id) đều trả 200;
+chỉ lỗi hạ tầng (DB) trả 500 để SePay gửi lại.
+
+Bảng `bank_transactions` ghi **mọi** giao dịch SePay báo, khớp hay không, kèm payload gốc.
+Unique `(provider, provider_txn_id)` + `ON CONFLICT DO NOTHING` → webhook gửi lại là no-op.
+Ghi giao dịch, tìm đơn (`FOR UPDATE`), cấp gói nằm trong **một** transaction.
+
+Tìm mã đơn (`OrderCodeCandidates`): trường `code` SePay tự nhận diện → mã đứng nguyên trong
+nội dung → mã sau khi bỏ khoảng trắng/gạch/chấm (khách gõ `KV7K9 Q2MXA`). Bước cuối có thể
+ghép nhầm chữ của tên người thành mã giả, nên chỉ nhận ứng viên **có thật** trong DB, theo thứ tự.
+
+Quy tắc (`settle`, dùng chung cho webhook và admin gán tay):
+
+| Đơn | Số tiền | Kết quả |
+|---|---|---|
+| `pending` hoặc `expired` | đúng | **cấp gói** (`expired` ghi chú "paid after QR expiry") |
+| bất kỳ chưa trả | sai | đơn → `needs_review` (`amount_mismatch`), không cấp |
+| `cancelled` | bất kỳ | đơn → `needs_review` (`late_payment`) |
+| `needs_review` | bất kỳ | giữ review, cộng dồn `paid_amount_vnd` (khách chuyển bù) |
+| `paid` | bất kỳ | giao dịch `duplicate_payment`, đơn giữ nguyên (thường là hoàn tiền) |
+| không tìm thấy | — | `unmatched` |
+| tiền ra / STK khác | — | `ignored` |
+
+Đơn `expired` trả đúng tiền vẫn cấp gói (khác plan ban đầu là đưa vào review): QR hết hạn mà
+khách vẫn trả đủ là ý định mua rõ ràng, và hạn cộng dồn nên kể cả khách trả thêm một đơn mới
+cũng không mất gì.
+
+Cần người xử lý (`unmatched`, `duplicate_payment`, `amount_mismatch`, `needs_review`) → Telegram
+P1. Lỗi ghi DB → P0. Đơn được trả → email biên nhận (goroutine sau commit; lỗi SMTP chỉ log).
+
+Admin:
+
+| Endpoint | Việc |
+|---|---|
+| `GET /api/admin/payments/bank-transactions?status=open\|<match_status>&q=` | `open` = `unmatched` + `duplicate_payment` |
+| `POST .../bank-transactions/:id/attach` `{order_code, note}` | chỉ từ `unmatched`; chạy `settle` với `payment_manual` + actor |
+| `POST .../bank-transactions/:id/dismiss` `{note}` | `unmatched`/`duplicate_payment` → `dismissed` (không phải thanh toán app / đã hoàn) |
+
+Sai tiền / trả trễ không nằm trong hàng chờ giao dịch mà nằm trên **đơn** (`needs_review`),
+xử lý bằng `orders/:code/confirm` hoặc `cancel`.
+
 ## Chưa có (tầng 3+)
 
-- Đơn hàng + webhook SePay (Phase 2–3 của plan thanh toán).
+- Cron đối soát kéo lịch sử giao dịch từ API SePay để vớt webhook mất quá 5 giờ retry.
+- Export CSV đơn thanh toán.
 - Không tự khớp sao kê ngân hàng. `summary` là số hệ thống ghi nhận, phải đối chiếu tay.
 - Không xuất hoá đơn / VAT.
 - Không nhắc hạn trước khi gói sắp hết — host bị cắt mà không được báo trước.

@@ -38,11 +38,11 @@ func setupDB(t *testing.T) {
 	}
 	db.DB = g
 	if err := g.AutoMigrate(&model.User{}, &model.PricingPlan{}, &model.Subscription{},
-		&model.SubscriptionEvent{}, &model.SystemSetting{}, &model.PaymentProduct{}, &model.PaymentOrder{}); err != nil {
+		&model.SubscriptionEvent{}, &model.SystemSetting{}, &model.PaymentProduct{}, &model.PaymentOrder{}, &model.BankTransaction{}); err != nil {
 		t.Fatal(err)
 	}
 	g.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_orders_one_pending ON payment_orders (user_id) WHERE status = 'pending'`)
-	g.Exec(`TRUNCATE users, pricing_plans, subscriptions, subscription_events, system_settings, payment_products, payment_orders RESTART IDENTITY CASCADE`)
+	g.Exec(`TRUNCATE users, pricing_plans, subscriptions, subscription_events, system_settings, payment_products, payment_orders, bank_transactions RESTART IDENTITY CASCADE`)
 
 	must(t, g.Create(&model.PricingPlan{ID: "free", Name: "Free", IsActive: true}).Error)
 	must(t, g.Create(&model.PricingPlan{ID: "pro", Name: "Pro", IsActive: true, MaxPlayersPerRoom: 2000}).Error)
