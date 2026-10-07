@@ -72,7 +72,7 @@ func TestReconcileRecoversMissedWebhook(t *testing.T) {
 	if got := reload(t, missed.OrderCode); got.Status != model.OrderPaid {
 		t.Fatalf("missed order %+v", got)
 	}
-	if countEvents(t, seen.OrderCode) != 1 {
+	if countCodes(t, seen.OrderCode) != 1 {
 		t.Fatal("seen order granted twice")
 	}
 

@@ -290,14 +290,6 @@ func AdminSetPlanWithContext(userID uint, planID string, opts AssignOptions, gc 
 	return setPlanTx(db.DB, userID, planID, opts, gc)
 }
 
-// GrantInTx applies a plan inside a caller's transaction. It exists for the
-// payment package: marking an order paid and granting what it paid for must
-// commit together, or a retried webhook could pay once and grant twice (or
-// grant nothing). Same writer, same history row as every other grant.
-func GrantInTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc GrantContext) (*model.Subscription, error) {
-	return setPlanTx(tx, userID, planID, opts, gc)
-}
-
 // setPlanTx is the single writer for a user's subscription row. It takes the
 // gorm handle so a caller that is already inside a transaction — RedeemCode —
 // grants the plan atomically with the bookkeeping that justified the grant,

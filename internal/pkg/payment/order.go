@@ -27,7 +27,6 @@ var (
 	ErrCheckoutClosed     = errors.New("Online checkout is not available")
 	ErrCheckoutNotReady   = errors.New("Checkout is not configured on the server")
 	ErrProductUnavailable = errors.New("Product is not available")
-	ErrLifetimePlan       = errors.New("Your account already has this plan with no expiry")
 	ErrOrderNotFound      = errors.New("Order not found")
 	ErrOrderNotPending    = errors.New("Order is no longer pending")
 	ErrOrderAlreadyPaid   = errors.New("Order is already paid")
@@ -83,14 +82,6 @@ func createOrderOnce(userID uint, productID string) (*model.PaymentOrder, error)
 			return ErrProductUnavailable
 		}
 
-		// Paying for a timed term on top of a lifetime licence buys nothing:
-		// the grant keeps it lifetime (computeTerm). Refuse before money moves.
-		var sub model.Subscription
-		if err := tx.Where("user_id = ?", userID).First(&sub).Error; err == nil &&
-			sub.PlanID == p.PlanID && sub.EndsAt == nil {
-			return ErrLifetimePlan
-		}
-
 		if err := tx.Model(&model.PaymentOrder{}).
 			Where("user_id = ? AND status = ?", userID, model.OrderPending).
 			Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
@@ -132,11 +123,48 @@ func GetUserOrder(userID uint, code string) (*model.PaymentOrder, error) {
 	return &o, nil
 }
 
-// ListUserOrders returns the user's most recent orders.
-func ListUserOrders(userID uint, limit int) ([]model.PaymentOrder, error) {
-	var out []model.PaymentOrder
-	err := db.DB.Where("user_id = ?", userID).Order("created_at DESC").Limit(limit).Find(&out).Error
+// UserOrderRow is an order as its buyer sees it: with whether the code it
+// bought has been used, and whether it was used on the buyer's own account.
+type UserOrderRow struct {
+	model.PaymentOrder
+	CodeUsed     bool `json:"code_used"`
+	RedeemedByMe bool `json:"redeemed_by_me"`
+}
+
+// codeJoins attaches the order's code and its (single) redemption.
+const codeJoins = "LEFT JOIN license_codes c ON c.code = o.license_code " +
+	"LEFT JOIN license_redemptions lr ON lr.code = o.license_code"
+
+// ListUserOrders returns the user's most recent orders with their code state.
+func ListUserOrders(userID uint, limit int) ([]UserOrderRow, error) {
+	var out []UserOrderRow
+	err := db.DB.Table("payment_orders AS o").
+		Select("o.*, COALESCE(c.used_count >= c.max_uses, false) AS code_used, "+
+			"COALESCE(lr.user_id = o.user_id, false) AS redeemed_by_me").
+		Joins(codeJoins).
+		Where("o.user_id = ?", userID).
+		Order("o.created_at DESC").Limit(limit).Scan(&out).Error
 	return out, err
+}
+
+// UserOrderView wraps GetUserOrder with the code state, for the checkout page.
+func UserOrderView(userID uint, code string) (*UserOrderRow, error) {
+	o, err := GetUserOrder(userID, code)
+	if err != nil {
+		return nil, err
+	}
+	row := &UserOrderRow{PaymentOrder: *o}
+	if o.LicenseCode != "" {
+		var st struct {
+			Used, Mine bool
+		}
+		db.DB.Table("license_codes AS c").
+			Select("c.used_count >= c.max_uses AS used, "+
+				"EXISTS (SELECT 1 FROM license_redemptions lr WHERE lr.code = c.code AND lr.user_id = ?) AS mine", userID).
+			Where("c.code = ?", o.LicenseCode).Scan(&st)
+		row.CodeUsed, row.RedeemedByMe = st.Used, st.Mine
+	}
+	return row, nil
 }
 
 // CancelUserOrder lets a buyer abandon their own pending checkout.
@@ -161,18 +189,31 @@ func CancelUserOrder(userID uint, code string) (*model.PaymentOrder, error) {
 	return &o, nil
 }
 
-// MarkPaidTx grants what the order paid for and marks it paid, inside the
-// caller's transaction. The only place an order turns into a plan — the
-// webhook and the admin confirm both come through here.
+// MarkPaidTx marks an order paid and mints the activation code it bought,
+// inside the caller's transaction. The only place an order turns into
+// something of value — the webhook, the admin confirm and an attached transfer
+// all come through here.
 //
-// The term is stacked (Extend) on any live term of the same plan: a buyer who
-// renews early keeps the days they had.
+// It grants no plan. The code (one use, the order's term, the money and bank
+// reference that paid for it) is the product: the buyer redeems it here or
+// hands it to another account, and redeeming stacks onto a live term.
 func MarkPaidTx(tx *gorm.DB, o *model.PaymentOrder, paidAmount int, gc license.GrantContext) error {
-	days := o.DurationDays
-	gc.SourceRef = o.OrderCode
-	gc.AmountVND = paidAmount
-	if _, err := license.GrantInTx(tx, o.UserID, o.PlanID,
-		license.AssignOptions{EndsAtDays: &days, Extend: true}, gc); err != nil {
+	note := "QR order " + o.OrderCode
+	if gc.Note != "" {
+		note += " — " + gc.Note
+	}
+	codes, err := license.GenerateCodesTx(tx, license.GenerateOptions{
+		PlanID:       o.PlanID,
+		Count:        1,
+		DurationDays: o.DurationDays,
+		MaxUses:      1,
+		Batch:        "order:" + o.OrderCode,
+		Note:         clip(note, 255),
+		AmountVND:    paidAmount,
+		ExternalRef:  gc.ExternalRef,
+		CreatedBy:    gc.ActorUserID,
+	})
+	if err != nil {
 		return err
 	}
 	now := time.Now()
@@ -181,6 +222,7 @@ func MarkPaidTx(tx *gorm.DB, o *model.PaymentOrder, paidAmount int, gc license.G
 	o.PaidAt = &now
 	o.PaidAmountVND = paidAmount
 	o.ExternalRef = gc.ExternalRef
+	o.LicenseCode = codes[0].Code
 	if gc.ActorUserID != 0 {
 		actor := gc.ActorUserID
 		o.ConfirmedBy = &actor
@@ -281,6 +323,11 @@ type AdminOrderFilter struct {
 type AdminOrderRow struct {
 	model.PaymentOrder
 	Email string `json:"email"`
+	// Code state: whether it was redeemed, by whom and when. The buyer may
+	// legitimately redeem on another account, so RedeemedBy can differ from Email.
+	CodeUsed   bool       `json:"code_used"`
+	RedeemedBy string     `json:"redeemed_by,omitempty"`
+	RedeemedAt *time.Time `json:"redeemed_at,omitempty"`
 }
 
 // ListAdminOrders lists orders newest first, orders that need a human on top.
@@ -289,14 +336,17 @@ func ListAdminOrders(f AdminOrderFilter) ([]AdminOrderRow, error) {
 		f.Limit = 200
 	}
 	q := db.DB.Table("payment_orders AS o").
-		Select("o.*, u.email AS email").
-		Joins("LEFT JOIN users u ON u.id = o.user_id")
+		Select("o.*, u.email AS email, COALESCE(c.used_count >= c.max_uses, false) AS code_used, " +
+			"ru.email AS redeemed_by, lr.created_at AS redeemed_at").
+		Joins("LEFT JOIN users u ON u.id = o.user_id").
+		Joins(codeJoins).
+		Joins("LEFT JOIN users ru ON ru.id = lr.user_id")
 	if f.Status != "" {
 		q = q.Where("o.status = ?", f.Status)
 	}
 	if s := strings.TrimSpace(f.Q); s != "" {
 		like := "%" + strings.ToLower(s) + "%"
-		q = q.Where("LOWER(o.order_code) LIKE ? OR LOWER(u.email) LIKE ?", like, like)
+		q = q.Where("LOWER(o.order_code) LIKE ? OR LOWER(u.email) LIKE ? OR LOWER(o.license_code) LIKE ?", like, like, like)
 	}
 	if f.From != nil {
 		q = q.Where("o.created_at >= ?", *f.From)

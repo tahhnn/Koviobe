@@ -294,6 +294,26 @@ bị bỏ qua lúc khởi động (log WARNING) và nút ẩn đi.
 Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp),
 `payment_manual` (admin xác nhận tay một đơn QR).
 
+### Mua = nhận mã kích hoạt (thống nhất 2026-10-07)
+
+Mọi cách mua đều kết thúc bằng **một mã kích hoạt**; người mua và admin cùng giữ mã đó.
+
+| Kênh | Ai tạo mã | Người mua nhận mã ở đâu |
+|---|---|---|
+| QR SePay | Hệ thống, khi đơn được trả (`MarkPaidTx` → `GenerateCodesTx`) | Màn checkout, email biên nhận, lịch sử thanh toán trong Cài đặt |
+| Zalo / chuyển khoản tay | Admin, tab "Mã kích hoạt" (ghi số tiền + mã GD) | Email do admin gửi từ tab đó |
+
+- Trả tiền **không cấp gói**. Mã: 1 lượt dùng, thời hạn = thời hạn gói đã mua, không hết hạn nhập,
+  mang `amount_vnd` + `external_ref` (mã GD ngân hàng), `batch = order:<mã đơn>`, `created_by` = admin
+  nếu admin xác nhận tay (0 nếu webhook tự khớp). `payment_orders.license_code` trỏ tới mã.
+- Người mua bấm "Kích hoạt cho tài khoản này" hoặc đưa mã cho tài khoản khác (mua hộ, tặng).
+  Vì vậy host đang có Pro vĩnh viễn **vẫn mua được** (bỏ chặn `ErrLifetimePlan`).
+- `RedeemCode` giờ **cộng dồn** (`Extend: true`): nhập mã khi còn hạn cùng gói thì hạn mới = hạn cũ + N.
+- Doanh thu trong `subscription_events` ghi lúc **nhập mã** (`code_redeem`, mang số tiền của mã), không
+  phải lúc trả tiền. Đối soát tiền đã thu: dùng `orders.csv` (đơn `paid`) hoặc tab "Mã kích hoạt".
+- "Gán gói tay" của admin giữ lại cho việc nội bộ (bù, tặng, sửa sai), UI không còn ô ghi nhận thanh toán.
+- Giá chỉ còn ở `payment_products`. `pricing_plans.price_monthly_vnd` không còn hiển thị ở đâu.
+
 ### Đơn QR (Phase 2, package `internal/pkg/payment`)
 
 Bảng `payment_orders`: snapshot gói/thời hạn/giá lúc tạo, mã `KV` + 8 ký tự (bảng chữ cái của mã

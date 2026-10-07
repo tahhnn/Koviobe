@@ -35,7 +35,7 @@ const (
 // in at creation so a later price change never rewrites what an open order
 // asks for or what a paid one cost.
 //
-// Buying through Zalo creates no order — an admin grants the plan directly.
+// Buying through Zalo creates no order — an admin mints a code and sends it.
 type PaymentOrder struct {
 	ID           uint   `gorm:"primaryKey" json:"id"`
 	OrderCode    string `gorm:"size:16;uniqueIndex;not null" json:"order_code"`
@@ -53,12 +53,16 @@ type PaymentOrder struct {
 	PaidAt       *time.Time `json:"paid_at,omitempty"`
 	// PaidAmountVND is the money that actually arrived, which is what the
 	// history row carries — not AmountVND, the price asked.
-	PaidAmountVND int       `gorm:"not null" json:"paid_amount_vnd"`
-	ExternalRef   string    `gorm:"size:120;index" json:"external_ref,omitempty"`
-	ConfirmedBy   *uint     `gorm:"index" json:"confirmed_by,omitempty"`
-	Note          string    `gorm:"size:255" json:"note,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	PaidAmountVND int    `gorm:"not null" json:"paid_amount_vnd"`
+	ExternalRef   string `gorm:"size:120;index" json:"external_ref,omitempty"`
+	ConfirmedBy   *uint  `gorm:"index" json:"confirmed_by,omitempty"`
+	// LicenseCode is the activation code the payment bought. A paid order
+	// grants nothing by itself: the buyer redeems the code, on this account or
+	// any other, and both the buyer and the admin can always look it up here.
+	LicenseCode string    `gorm:"size:32;index" json:"license_code,omitempty"`
+	Note        string    `gorm:"size:255" json:"note,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Bank transaction match outcomes.
