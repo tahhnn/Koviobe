@@ -21,6 +21,9 @@ import (
 // Keys. One constant per knob so a typo is a compile error, not a silent default.
 const (
 	KeyLicenseEnforcement = "license.enforcement"
+	// KeyPaymentEnabled gates self-service QR checkout. Off until the SePay
+	// webhook is live; the Zalo contact link does not depend on it.
+	KeyPaymentEnabled = "payment.enabled"
 )
 
 // ErrNotFound is returned by Get when the key has never been written.

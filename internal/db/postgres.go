@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -86,6 +87,9 @@ func AutoMigrate() {
 		&model.LicenseRedemption{},
 		&model.SubscriptionEvent{},
 		&model.SystemSetting{},
+		&model.PaymentProduct{},
+		&model.PaymentOrder{},
+		&model.BankTransaction{},
 	)
 	if err != nil {
 		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)
@@ -175,6 +179,8 @@ func seedDefaultData() {
 	backfillAuditStatus()
 
 	seedPricingPlans()
+	seedPaymentProducts()
+	ensurePaymentOrderIndexes()
 	backfillFreeSubscriptions()
 	seedFixedAdmin(adminRole)
 	promoteAdminEmails(adminRole)
@@ -364,6 +370,39 @@ func seedPricingPlans() {
 			}
 		}
 		// Do not overwrite admin-tuned limits on every boot — only create if missing
+	}
+}
+
+// seedPaymentProducts creates the sellable terms once. Rows are created
+// inactive: the prices below are only a starting point derived from the Pro
+// monthly list price, and nothing goes on sale until an admin has reviewed the
+// price and switched the product on. Existing rows are never touched, so an
+// admin's price survives every restart.
+func seedPaymentProducts() {
+	products := []model.PaymentProduct{
+		{ID: "pro_1m", PlanID: "pro", Name: "Pro 1 tháng", DurationDays: 30, AmountVND: 199000, SortOrder: 1},
+		{ID: "pro_3m", PlanID: "pro", Name: "Pro 3 tháng", DurationDays: 90, AmountVND: 597000, SortOrder: 2},
+		{ID: "pro_12m", PlanID: "pro", Name: "Pro 12 tháng", DurationDays: 365, AmountVND: 2388000, SortOrder: 3},
+	}
+	for _, p := range products {
+		res := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&p)
+		if res.Error != nil {
+			log.Printf("Failed to seed payment product %s: %v", p.ID, res.Error)
+		} else if res.RowsAffected > 0 {
+			log.Printf("Seeded payment product: %s (inactive)", p.ID)
+		}
+	}
+}
+
+// ensurePaymentOrderIndexes adds what GORM tags cannot express: at most one
+// pending order per user. Creating a new checkout cancels the old one in the
+// same transaction, so this only bites two checkouts racing — and then the
+// loser fails instead of leaving the host with two live QR codes for one
+// purchase. Idempotent.
+func ensurePaymentOrderIndexes() {
+	if err := DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_orders_one_pending
+		ON payment_orders (user_id) WHERE status = 'pending'`).Error; err != nil {
+		log.Printf("Failed to create uq_payment_orders_one_pending: %v", err)
 	}
 }
 

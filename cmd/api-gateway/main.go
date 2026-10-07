@@ -57,6 +57,8 @@ func main() {
 	cron.StartUploadCleanupWorker()
 	cron.StartDigestWorker()
 	cron.StartAuditRetentionWorker()
+	cron.StartPaymentExpiryWorker()
+	cron.StartPaymentReconcileWorker()
 	// Read-only command bot. Started after the services it reports on, so
 	// /status never answers about a half-initialised process.
 	telegrambot.Start(telegrambot.Config{
@@ -125,6 +127,11 @@ func main() {
 
 		// Public plan catalog
 		api.GET("/license/plans", handler.ListPlans)
+		// Public price list + how to reach a person to buy (Zalo).
+		api.GET("/payments/products", handler.ListPaymentProducts)
+		// SePay bank-transfer webhook. No user auth: SePay authenticates with
+		// "Authorization: Apikey <SEPAY_API_KEY>", checked in the handler.
+		api.POST("/payments/webhook/sepay", middleware.SePayWebhookGuard(), handler.SePayWebhook)
 
 		// Realtime tokens — require host JWT or player JWT (no open public minting)
 		api.GET("/realtime/token", handler.GetRealtimeToken)
@@ -159,6 +166,13 @@ func main() {
 			// account. Rate limited because the code is the only secret.
 			private.POST("/license/redeem", middleware.RedeemRateLimit(), handler.RedeemLicenseCode)
 
+			// Self-service QR checkout (SePay). Any signed-in account may buy for
+			// itself; order reads are owner-only inside the handler.
+			private.POST("/payments/orders", middleware.PaymentOrderRateLimit(), handler.CreatePaymentOrder)
+			private.GET("/payments/orders", handler.ListMyPaymentOrders)
+			private.GET("/payments/orders/:code", handler.GetPaymentOrder)
+			private.POST("/payments/orders/:code/cancel", handler.CancelPaymentOrder)
+
 			adminLicense := private.Group("/admin/license")
 			adminLicense.Use(middleware.RequireRole("admin"))
 			{
@@ -176,6 +190,23 @@ func main() {
 				adminLicense.GET("/history.csv", handler.AdminExportSubscriptionHistory)
 				adminLicense.GET("/enforcement", handler.AdminGetEnforcement)
 				adminLicense.PUT("/enforcement", handler.AdminSetEnforcement)
+			}
+
+			adminPayments := private.Group("/admin/payments")
+			adminPayments.Use(middleware.RequireRole("admin"))
+			{
+				adminPayments.GET("/products", handler.AdminListPaymentProducts)
+				adminPayments.PUT("/products/:id", handler.AdminUpdatePaymentProduct)
+				adminPayments.GET("/orders", handler.AdminListPaymentOrders)
+				adminPayments.GET("/orders.csv", handler.AdminExportPaymentOrders)
+				adminPayments.POST("/reconcile", handler.AdminReconcilePayments)
+				adminPayments.POST("/orders/:code/confirm", handler.AdminConfirmPaymentOrder)
+				adminPayments.POST("/orders/:code/cancel", handler.AdminCancelPaymentOrder)
+				adminPayments.GET("/bank-transactions", handler.AdminListBankTransactions)
+				adminPayments.POST("/bank-transactions/:id/attach", handler.AdminAttachBankTransaction)
+				adminPayments.POST("/bank-transactions/:id/dismiss", handler.AdminDismissBankTransaction)
+				adminPayments.GET("/checkout", handler.AdminGetCheckout)
+				adminPayments.PUT("/checkout", handler.AdminSetCheckout)
 			}
 
 			adminUsers := private.Group("/admin/users")

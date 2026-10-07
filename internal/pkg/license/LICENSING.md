@@ -14,7 +14,7 @@ Còn phải làm trước khi bật — xem "Quy trình bật enforcement" bên 
 - [x] `03_fix_code_duration_default.sql`
 - [x] `04_fix_questions_per_quiz_default.sql`
 
-Thanh toán **không chạy trên app** — khách trả qua trung gian (chuyển khoản, đại lý), admin đúc mã hoặc gán gói sau khi tiền về. Hệ thống ghi lại số tiền + mã tham chiếu để đối soát với sao kê, không tự xác nhận thanh toán.
+Thanh toán: hiện vẫn **ngoài app** — khách liên hệ qua Zalo (link `PAYMENT_ZALO_URL`, trả ở `GET /api/payments/products`), trả tiền, admin gán gói (ghi `amount_vnd` + `external_ref`) hoặc đúc mã. QR tự động qua SePay đang làm theo plan `/root/plans/2026-10-06-payment-sepay-zalo.md` — xem mục "Thanh toán" cuối file.
 
 ## Kill switch
 
@@ -253,9 +253,156 @@ trận của ai.
 Package `license` không tự đóng phòng: archive là việc của package `handler`, kéo vào đây
 là đảo ngược phụ thuộc. Nó trả id, cron gọi handler.
 
-## Chưa có (tầng 3+)
+## Thanh toán (2026-10-06, Phase 1)
 
-- Cổng thanh toán tự động — **cố ý không làm**. Thanh toán qua trung gian, ngoài app.
+Quyết định "cố ý không làm cổng thanh toán" đã được đảo: QR tự động qua SePay, còn mua trực tiếp
+thì app **chỉ hiện link Zalo** — không có đơn hàng, admin cấp gói bằng công cụ có sẵn.
+
+**Cộng dồn hạn (`AssignOptions.Extend`).** Trước đây mọi lần cấp gói đặt `StartsAt = now`,
+`EndsAt = now + N`: khách còn 10 ngày mà gia hạn sớm thì mất 10 ngày. `computeTerm` (thuần,
+có test `term_test.go`) giờ quyết định ngày:
+
+- `Extend` + cùng gói + chưa hết hạn → `EndsAt = EndsAt cũ + N`, giữ `StartsAt` cũ.
+- `Extend` + cùng gói đang **vĩnh viễn** → vẫn vĩnh viễn. Mua 30 ngày không bao giờ được rút
+  ngắn một gói vĩnh viễn.
+- Hết hạn rồi (kể cả chưa bị cron hạ), khác gói, hoặc không `Extend` → `now + N` như cũ.
+
+`Extend` mặc định `false`: API cũ giữ nguyên hành vi. `POST /api/admin/license/assign` nhận
+`"extend": true`; UI tab Subscriptions tự tick khi user đang có Pro còn hạn và hiện "hạn mới"
+trước khi bấm. **Chưa** bật cho `RedeemCode` — chờ quyết định.
+
+**Có tiền thì phải có mã tham chiếu.** `assign` trả 400 khi `amount_vnd > 0` mà
+`external_ref` rỗng, và từ chối `amount_vnd < 0`.
+
+**Bảng `payment_products`** — SKU bán theo thời hạn (`pro_1m`, `pro_3m`, `pro_12m`). Seed
+**tắt** (`is_active = false`), giá seed chỉ là nháp = 199.000đ × số tháng; admin phải duyệt giá
+rồi bật. Không cột nào có `default` (bẫy GORM ở trên).
+
+| Endpoint | Ai | Việc |
+|---|---|---|
+| `GET /api/payments/products` | public | SKU đang bán + `payment_enabled` + `contact.zalo_url` |
+| `GET /api/admin/payments/products` | admin | mọi SKU |
+| `PUT /api/admin/payments/products/:id` | admin | sửa tên / thời hạn (1–3660 ngày) / giá (≥ 1.000đ) / bật tắt; audit `admin_payment_product_update` |
+
+`payment.enabled` (system_settings, mặc định tắt) chỉ chặn checkout QR. Link Zalo không phụ
+thuộc cờ này.
+
+`PAYMENT_ZALO_URL` là **env, không phải setting admin sửa được**: một phiên admin bị chiếm mà
+đổi được link thì khách thật nhắn và chuyển tiền cho kẻ gian. Phải là URL `https://`, sai thì
+bị bỏ qua lúc khởi động (log WARNING) và nút ẩn đi.
+
+Source mới trong `subscription_events`: `payment_sepay` (webhook tự khớp),
+`payment_manual` (admin xác nhận tay một đơn QR).
+
+### Đơn QR (Phase 2, package `internal/pkg/payment`)
+
+Bảng `payment_orders`: snapshot gói/thời hạn/giá lúc tạo, mã `KV` + 8 ký tự (bảng chữ cái của mã
+license, không dấu gạch — ngân hàng xoá dấu). Mỗi user tối đa **một** đơn `pending` (partial
+unique index `uq_payment_orders_one_pending`, tạo lúc khởi động); tạo đơn mới huỷ đơn cũ trong
+cùng transaction. Hết hạn sau 30 phút (`OrderTTL`); `GetUserOrder` báo `expired` ngay, cron 5 phút
+ghi xuống bảng.
+
+`MarkPaidTx` là chỗ **duy nhất** biến đơn thành gói: gọi `license.GrantInTx` với `Extend: true`
+trong cùng transaction, `SourceRef` = mã đơn, `AmountVND` = tiền thật về.
+
+Checkout chỉ mở khi **cả hai**: `payment.enabled = true` và server có `PAYMENT_BANK_NAME`,
+`PAYMENT_BANK_ACCOUNT`, `SEPAY_API_KEY` (`CheckoutConfigured`). API bật công tắc từ chối khi
+thiếu cấu hình. `SEPAY_API_KEY` trên prod phải ≥ 24 ký tự.
+
+| Endpoint | Ai | Việc |
+|---|---|---|
+| `POST /api/payments/orders` | đăng nhập, 5/phút/user | `{product_id}` → đơn + thông tin CK + `qr_url`; 409 khi đóng / đã có gói vĩnh viễn |
+| `GET /api/payments/orders[/:code]` | chủ đơn | đơn của người khác trả 404 |
+| `POST /api/payments/orders/:code/cancel` | chủ đơn | chỉ khi `pending` |
+| `GET /api/admin/payments/orders` | admin | `status`/`q`/`from`/`to`, `needs_review` lên đầu |
+| `POST /api/admin/payments/orders/:code/confirm` | admin | bắt buộc `amount_vnd`, `external_ref`, `note`; mọi trạng thái trừ `paid` |
+| `POST /api/admin/payments/orders/:code/cancel` | admin | `pending`/`needs_review`/`expired` |
+| `GET/PUT /api/admin/payments/checkout` | admin | công tắc `payment.enabled` |
+
+Ảnh QR: `PAYMENT_QR_IMAGE_BASE` (mặc định `https://vietqr.app/img`, dịch vụ VietQR của SePay)
+với `acc`, `bank`, `amount`, `des` = mã đơn. Trình duyệt người mua tải ảnh trực tiếp từ đó.
+
+Test DB thật: `order_db_test.go`, chạy khi có `PAYMENT_TEST_DSN` (xem đầu file) — gồm 8 admin
+confirm đồng thời (đúng 1 lần cấp) và 6 checkout đồng thời (đúng 1 đơn pending).
+
+Không có permission `payment:confirm` riêng: `RequirePermission` cho admin qua hết, nên route
+chỉ cần `RequireRole("admin")`.
+
+### Webhook SePay (Phase 3)
+
+`POST /api/payments/webhook/sepay` — không qua auth user; SePay gửi
+`Authorization: Apikey <SEPAY_API_KEY>`, so sánh constant-time. Không cấu hình key = mọi request
+401. `SEPAY_IP_ALLOWLIST` (danh sách IP SePay công bố, cách nhau dấu phẩy) chặn thêm theo
+`ClientIP()`; để trống thì bỏ kiểm IP. Rate limit 120/phút/IP, **fail-open** khi Redis lỗi:
+từ chối webhook chỉ khiến SePay retry, nhưng quá 5 giờ retry là mất một khoản tiền thật.
+
+Hợp đồng phản hồi của SePay: 200 + `{"success": true}` trong 30 s, nếu không nó retry tối đa 7
+lần / 5 giờ. Nên mọi kết quả nghiệp vụ (không có mã, sai tiền, tiền ra, trùng id) đều trả 200;
+chỉ lỗi hạ tầng (DB) trả 500 để SePay gửi lại.
+
+Bảng `bank_transactions` ghi **mọi** giao dịch SePay báo, khớp hay không, kèm payload gốc.
+Unique `(provider, provider_txn_id)` + `ON CONFLICT DO NOTHING` → webhook gửi lại là no-op.
+Ghi giao dịch, tìm đơn (`FOR UPDATE`), cấp gói nằm trong **một** transaction.
+
+Tìm mã đơn (`OrderCodeCandidates`): trường `code` SePay tự nhận diện → mã đứng nguyên trong
+nội dung → mã sau khi bỏ khoảng trắng/gạch/chấm (khách gõ `KV7K9 Q2MXA`). Bước cuối có thể
+ghép nhầm chữ của tên người thành mã giả, nên chỉ nhận ứng viên **có thật** trong DB, theo thứ tự.
+
+Quy tắc (`settle`, dùng chung cho webhook và admin gán tay):
+
+| Đơn | Số tiền | Kết quả |
+|---|---|---|
+| `pending` hoặc `expired` | đúng | **cấp gói** (`expired` ghi chú "paid after QR expiry") |
+| bất kỳ chưa trả | sai | đơn → `needs_review` (`amount_mismatch`), không cấp |
+| `cancelled` | bất kỳ | đơn → `needs_review` (`late_payment`) |
+| `needs_review` | bất kỳ | giữ review, cộng dồn `paid_amount_vnd` (khách chuyển bù) |
+| `paid` | bất kỳ | giao dịch `duplicate_payment`, đơn giữ nguyên (thường là hoàn tiền) |
+| không tìm thấy | — | `unmatched` |
+| tiền ra / STK khác | — | `ignored` |
+
+Đơn `expired` trả đúng tiền vẫn cấp gói (khác plan ban đầu là đưa vào review): QR hết hạn mà
+khách vẫn trả đủ là ý định mua rõ ràng, và hạn cộng dồn nên kể cả khách trả thêm một đơn mới
+cũng không mất gì.
+
+Cần người xử lý (`unmatched`, `duplicate_payment`, `amount_mismatch`, `needs_review`) → Telegram
+P1. Lỗi ghi DB → P0. Đơn được trả → email biên nhận (goroutine sau commit; lỗi SMTP chỉ log).
+
+Admin:
+
+| Endpoint | Việc |
+|---|---|
+| `GET /api/admin/payments/bank-transactions?status=open\|<match_status>&q=` | `open` = `unmatched` + `duplicate_payment` |
+| `POST .../bank-transactions/:id/attach` `{order_code, note}` | chỉ từ `unmatched`; chạy `settle` với `payment_manual` + actor |
+| `POST .../bank-transactions/:id/dismiss` `{note}` | `unmatched`/`duplicate_payment` → `dismissed` (không phải thanh toán app / đã hoàn) |
+
+Sai tiền / trả trễ không nằm trong hàng chờ giao dịch mà nằm trên **đơn** (`needs_review`),
+xử lý bằng `orders/:code/confirm` hoặc `cancel`.
+
+### Đối soát + xuất CSV (Phase 4)
+
+**Đối soát SePay** (`payment.Reconcile`): gọi `GET {SEPAY_API_BASE}/transactions/list`
+(mặc định `https://my.sepay.vn/userapi`, `Authorization: Bearer SEPAY_API_TOKEN`) lọc theo
+`account_number` + `transaction_date_min`, rồi đẩy từng giao dịch **tiền vào** qua đúng
+`ApplySePay` như webhook. Bỏ qua giao dịch < 15 phút (để webhook xử lý).
+
+- Cron mỗi giờ, cửa sổ 48 giờ (`StartPaymentReconcileWorker`); tắt khi thiếu `SEPAY_API_TOKEN`.
+- Có giao dịch được vớt = webhook đang bị lỡ → Telegram P1. Gọi API lỗi → P1.
+- Admin bấm tay: `POST /api/admin/payments/reconcile {days: 1..30}`.
+
+Chống ghi trùng: ngoài unique theo id SePay, `ApplySePay` bỏ qua giao dịch có **cùng mã tham
+chiếu ngân hàng + số tiền + STK** đã có trong sổ (`knownReference`). Lý do: chưa xác minh được id
+trong webhook và id trong API list có luôn trùng nhau không; nếu khác, không có lớp này một khoản
+tiền sẽ bị ghi hai lần và bị báo nhầm là "chuyển trùng".
+
+API list có thể trả số dạng `"2000.00"` — `flexInt` nhận cả số, chuỗi số và chuỗi thập phân.
+
+**Xuất CSV đơn**: `GET /api/admin/payments/orders.csv` (cùng bộ lọc với danh sách, 5000 dòng, BOM
+UTF-8, chặn formula injection bằng `csvSafe`), có audit `admin_payment_orders_export`.
+
+## Chưa có
+
+- Hoá đơn VAT / hoá đơn điện tử.
+- Hoàn tiền trong app — hoàn tiền làm ngoài app, rồi "đánh dấu đã xử lý" giao dịch trùng.
 - Không tự khớp sao kê ngân hàng. `summary` là số hệ thống ghi nhận, phải đối chiếu tay.
 - Không xuất hoá đơn / VAT.
 - Không nhắc hạn trước khi gói sắp hết — host bị cắt mà không được báo trước.

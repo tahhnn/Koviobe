@@ -56,6 +56,11 @@ type AssignOptions struct {
 	// EndsAtDays: nil = lifetime (no expiry). Pointer to N > 0 = expires in N days.
 	// Free plan always clears EndsAt regardless of this field.
 	EndsAtDays *int
+	// Extend stacks the new term on the unexpired remainder of the same plan
+	// instead of restarting the clock from now. A paying customer who renews
+	// with ten days left must end up with ten more days, not lose them. Off by
+	// default so every caller that predates it keeps its old behaviour.
+	Extend bool
 }
 
 // Grant sources. Every subscription change records which of these caused it, so
@@ -69,6 +74,12 @@ const (
 	// than a new Action because what happened to the subscription is still a
 	// downgrade; what is new is on whose authority.
 	SourceAdminRevoke = "admin_revoke"
+	// SourcePaymentSePay is a bank transfer matched to an order by the SePay
+	// webhook — granted with no human in the loop.
+	SourcePaymentSePay = "payment_sepay"
+	// SourcePaymentManual is an admin settling a payment order the webhook
+	// could not match on its own (wrong amount, late, unreadable content).
+	SourcePaymentManual = "payment_manual"
 )
 
 // GrantContext is the provenance written alongside a subscription change.
@@ -279,6 +290,14 @@ func AdminSetPlanWithContext(userID uint, planID string, opts AssignOptions, gc 
 	return setPlanTx(db.DB, userID, planID, opts, gc)
 }
 
+// GrantInTx applies a plan inside a caller's transaction. It exists for the
+// payment package: marking an order paid and granting what it paid for must
+// commit together, or a retried webhook could pay once and grant twice (or
+// grant nothing). Same writer, same history row as every other grant.
+func GrantInTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc GrantContext) (*model.Subscription, error) {
+	return setPlanTx(tx, userID, planID, opts, gc)
+}
+
 // setPlanTx is the single writer for a user's subscription row. It takes the
 // gorm handle so a caller that is already inside a transaction — RedeemCode —
 // grants the plan atomically with the bookkeeping that justified the grant,
@@ -294,34 +313,29 @@ func setPlanTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc G
 		return nil, errors.New("user not found")
 	}
 
-	now := time.Now()
-	var endsAt *time.Time
-	if planID == PlanFree {
-		endsAt = nil
-	} else if opts.EndsAtDays != nil {
-		if *opts.EndsAtDays <= 0 {
-			return nil, errors.New("ends_at_days must be > 0 (omit for lifetime)")
-		}
-		e := now.AddDate(0, 0, *opts.EndsAtDays)
-		endsAt = &e
+	if planID != PlanFree && opts.EndsAtDays != nil && *opts.EndsAtDays <= 0 {
+		return nil, errors.New("ends_at_days must be > 0 (omit for lifetime)")
 	}
-	// else paid + EndsAtDays nil → lifetime license
 
+	now := time.Now()
 	var sub model.Subscription
 	err := tx.Where("user_id = ?", userID).First(&sub).Error
 	// The subscription row is overwritten in place, so the plan being replaced has
 	// to be read before the write or it is gone.
 	previousPlan := ""
+	var current *model.Subscription
 	if err == nil {
 		previousPlan = sub.PlanID
+		current = &sub
 	}
+	startsAt, endsAt := computeTerm(now, current, planID, opts)
 
 	if err != nil {
 		sub = model.Subscription{
 			UserID:   userID,
 			PlanID:   planID,
 			Status:   "active",
-			StartsAt: now,
+			StartsAt: startsAt,
 			EndsAt:   endsAt,
 		}
 		if createErr := tx.Create(&sub).Error; createErr != nil {
@@ -330,7 +344,7 @@ func setPlanTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc G
 	} else {
 		sub.PlanID = planID
 		sub.Status = "active"
-		sub.StartsAt = now
+		sub.StartsAt = startsAt
 		sub.EndsAt = endsAt
 		if saveErr := tx.Save(&sub).Error; saveErr != nil {
 			return nil, saveErr
@@ -345,6 +359,37 @@ func setPlanTx(tx *gorm.DB, userID uint, planID string, opts AssignOptions, gc G
 
 	_ = tx.Preload("Plan").First(&sub, sub.ID)
 	return &sub, nil
+}
+
+// computeTerm decides the dates a grant writes. current is the user's existing
+// subscription row, nil when there is none. Kept free of the database so the
+// renewal arithmetic — where a mistake costs a paying customer days — is unit
+// tested directly.
+//
+//   - free never expires.
+//   - EndsAtDays nil on a paid plan is a lifetime licence.
+//   - Extend on the same plan with time left adds the term to the old end date
+//     and keeps the old start; an already lapsed term restarts from now.
+//   - Extend on a lifetime licence of the same plan keeps it lifetime: buying a
+//     30-day term must never shorten a perpetual one.
+func computeTerm(now time.Time, current *model.Subscription, planID string, opts AssignOptions) (time.Time, *time.Time) {
+	if planID == PlanFree {
+		return now, nil
+	}
+	if opts.EndsAtDays == nil {
+		return now, nil
+	}
+	sameLive := opts.Extend && current != nil && current.PlanID == planID &&
+		(current.EndsAt == nil || current.EndsAt.After(now))
+	if !sameLive {
+		e := now.AddDate(0, 0, *opts.EndsAtDays)
+		return now, &e
+	}
+	if current.EndsAt == nil {
+		return current.StartsAt, nil
+	}
+	e := current.EndsAt.AddDate(0, 0, *opts.EndsAtDays)
+	return current.StartsAt, &e
 }
 
 // recordEvent appends one immutable history row for a subscription change.

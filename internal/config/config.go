@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"log"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -78,6 +79,32 @@ type Config struct {
 	// commands, as a comma-separated list of Telegram numeric user IDs. Empty
 	// means anyone in TELEGRAM_CHAT_ID — which is already a closed group.
 	TelegramAdminIDs string
+
+	// PaymentZaloURL is where a buyer is sent to purchase a plan by talking to
+	// a person. An env var rather than an admin setting on purpose: a link that
+	// any admin session could rewrite is a link a stolen admin session could
+	// point at someone else's Zalo, taking real customers' money. Must be an
+	// https URL; anything else is dropped at load and the button is hidden.
+	PaymentZaloURL string
+
+	// Bank account that receives QR checkout transfers. Env, not a setting, for
+	// the same reason as PaymentZaloURL: whoever can change it receives the money.
+	PaymentBankName    string // bank name/code SePay's QR accepts, e.g. Vietcombank
+	PaymentBankAccount string
+	PaymentBankHolder  string
+	// PaymentQRImageBase renders the VietQR image (SePay: https://vietqr.app/img).
+	PaymentQRImageBase string
+	// SePayAPIKey authenticates SePay's webhook ("Authorization: Apikey <key>").
+	// Never returned by any endpoint.
+	SePayAPIKey string
+	// SePayIPAllowlist: comma-separated addresses the webhook accepts. Empty
+	// skips the check (dev); the API key is still required either way.
+	SePayIPAllowlist []string
+	// SePayAPIToken (Bearer) lets the hourly reconciliation read SePay's
+	// transaction list and recover transfers whose webhook never arrived.
+	// Different from SePayAPIKey, which SePay sends to us. Empty disables it.
+	SePayAPIToken string
+	SePayAPIBase  string
 }
 
 var AppConfig *Config
@@ -140,9 +167,46 @@ func LoadConfig() {
 		TelegramMaxPerMinute: getEnvInt("TELEGRAM_MAX_PER_MINUTE", 15),
 		TelegramDigestHour:   getEnvInt("TELEGRAM_DIGEST_HOUR", 8),
 		TelegramAdminIDs:     getEnv("TELEGRAM_ADMIN_IDS", ""),
+
+		PaymentZaloURL:     httpsURLOrEmpty("PAYMENT_ZALO_URL", getEnv("PAYMENT_ZALO_URL", "")),
+		PaymentBankName:    strings.TrimSpace(getEnv("PAYMENT_BANK_NAME", "")),
+		PaymentBankAccount: strings.TrimSpace(getEnv("PAYMENT_BANK_ACCOUNT", "")),
+		PaymentBankHolder:  strings.TrimSpace(getEnv("PAYMENT_BANK_HOLDER", "")),
+		PaymentQRImageBase: httpsURLOrEmpty("PAYMENT_QR_IMAGE_BASE", getEnv("PAYMENT_QR_IMAGE_BASE", "https://vietqr.app/img")),
+		SePayAPIKey:        strings.TrimSpace(getEnv("SEPAY_API_KEY", "")),
+		SePayIPAllowlist:   splitList(getEnv("SEPAY_IP_ALLOWLIST", "")),
+		SePayAPIToken:      strings.TrimSpace(getEnv("SEPAY_API_TOKEN", "")),
+		SePayAPIBase:       httpsURLOrEmpty("SEPAY_API_BASE", getEnv("SEPAY_API_BASE", "https://my.sepay.vn/userapi")),
 	}
 
 	validateSecurityConfig(AppConfig)
+}
+
+// splitList parses a comma-separated env value, dropping blanks.
+func splitList(raw string) []string {
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// httpsURLOrEmpty keeps raw only when it is an absolute https URL. A typo in a
+// link shown to buyers should hide the link, not render a broken or
+// javascript: href, and should not stop the API from starting.
+func httpsURLOrEmpty(name, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		log.Printf("WARNING: %s is not an https URL, ignoring it", name)
+		return ""
+	}
+	return u.String()
 }
 
 func validateSecurityConfig(cfg *Config) {
@@ -155,6 +219,13 @@ func validateSecurityConfig(cfg *Config) {
 	validateSecret("CENTRIFUGO_API_KEY", cfg.CentrifugoAPIKey, 32)
 	validateSecret("DB_PASSWORD", cfg.DBPassword, 16)
 	validateSecret("REDIS_PASSWORD", cfg.RedisPassword, 16)
+
+	// Optional until QR checkout goes live, but a key that is set must be one
+	// nobody can guess — it is the only thing standing between the internet
+	// and "mark this order paid".
+	if cfg.SePayAPIKey != "" {
+		validateSecret("SEPAY_API_KEY", cfg.SePayAPIKey, 24)
+	}
 
 	if (cfg.SMTPEmail == "") != (cfg.SMTPPassword == "") {
 		log.Fatal("FATAL: SMTP_EMAIL and SMTP_PASSWORD must either both be set or both be empty")
