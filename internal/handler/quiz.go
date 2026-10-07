@@ -387,20 +387,20 @@ func CreateRoom(c *gin.Context) {
 	var concurrent int64
 	db.DB.Model(&model.Room{}).Where("host_id = ? AND status IN ?", uid, []string{"waiting", "active"}).Count(&concurrent)
 	if license.Enforcing() && !license.IsUnlimited(ents.MaxConcurrentRooms) && int(concurrent) >= ents.MaxConcurrentRooms {
-		// Free plan often leaves stale waiting lobbies — close them so host can start a new room.
-		db.DB.Model(&model.Room{}).
-			Where("host_id = ? AND status = ?", uid, "waiting").
-			Updates(map[string]interface{}{
-				"status":                 "finished",
-				"current_question_id":    nil,
-				"current_question_index": -1,
-			})
-		db.DB.Model(&model.Room{}).Where("host_id = ? AND status IN ?", uid, []string{"waiting", "active"}).Count(&concurrent)
+		// Hosts leave lobbies they opened and never started; those should not
+		// block a new room. Only lobbies nobody has joined are closed, though.
+		// This used to close every waiting room, which with enforcement on meant
+		// a Pro host opening an 11th room silently ended ten lobbies full of
+		// players — nothing told them, the rows just turned "finished".
+		if closed := closeEmptyLobbies(uid); closed > 0 {
+			db.DB.Model(&model.Room{}).Where("host_id = ? AND status IN ?", uid, []string{"waiting", "active"}).Count(&concurrent)
+		}
 		if int(concurrent) >= ents.MaxConcurrentRooms {
 			c.JSON(http.StatusForbidden, gin.H{
-				"error":   fmt.Sprintf("Concurrent room limit reached (%d). End an active room or upgrade to Pro.", ents.MaxConcurrentRooms),
+				"error":   fmt.Sprintf("Concurrent room limit reached (%d). End a waiting or running room first.", ents.MaxConcurrentRooms),
 				"plan_id": ents.PlanID,
 				"limit":   ents.MaxConcurrentRooms,
+				"usage":   concurrent,
 			})
 			return
 		}
@@ -2001,6 +2001,31 @@ type finalRanking struct {
 // atomically so only one caller proceeds — a plain status check here would
 // still let two concurrent callers through the gap between the read and the
 // write.
+// closeEmptyLobbies ends the host's waiting rooms that no player has joined,
+// through FinalizeRoom so caches and cleanup follow the same path as End Game.
+// A player who joins in the instant between the check and the close is told
+// over game:ended like any other ending, not left in a dead lobby. Returns how
+// many were closed.
+func closeEmptyLobbies(hostID uint) int {
+	var ids []uint
+	if err := db.DB.Model(&model.Room{}).
+		Where("host_id = ? AND status = ?", hostID, "waiting").
+		Where("NOT EXISTS (SELECT 1 FROM players p WHERE p.room_id = rooms.id)").
+		Pluck("id", &ids).Error; err != nil {
+		log.Printf("[CreateRoom] list empty lobbies for host %d: %v", hostID, err)
+		return 0
+	}
+	closed := 0
+	for _, id := range ids {
+		if err := FinalizeRoom(id); err != nil {
+			log.Printf("[CreateRoom] close empty lobby %d: %v", id, err)
+			continue
+		}
+		closed++
+	}
+	return closed
+}
+
 // FinalizeRoom ends a room from outside the request path — the license expiry
 // sweep uses it so an expired host's live room is closed the same way the host's
 // own End Game closes it: archived, players notified over game:ended, cleanup
