@@ -448,6 +448,7 @@ func InstantiateTemplate(c *gin.Context) {
 		return
 	}
 
+	var rows []model.Question
 	for i, reqQ := range bankToQuestionReqs(bank) {
 		if strings.TrimSpace(reqQ.Content) == "" {
 			continue
@@ -458,7 +459,7 @@ func InstantiateTemplate(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid options for question %d", i+1)})
 			return
 		}
-		q := model.Question{
+		rows = append(rows, model.Question{
 			QuizID:        quiz.ID,
 			Content:       reqQ.Content,
 			Type:          reqQ.Type,
@@ -467,8 +468,10 @@ func InstantiateTemplate(c *gin.Context) {
 			Duration:      reqQ.Duration,
 			Points:        reqQ.Points,
 			Order:         i + 1,
-		}
-		if err := tx.Create(&q).Error; err != nil {
+		})
+	}
+	if len(rows) > 0 {
+		if err := tx.CreateInBatches(&rows, questionInsertBatch).Error; err != nil {
 			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create questions"})
 			return
@@ -558,7 +561,7 @@ func ImportBankQuestions(c *gin.Context) {
 	_ = db.DB.Model(&model.Question{}).Where("quiz_id = ?", quiz.ID).Select("COALESCE(MAX(\"order\"), 0)").Scan(&maxOrder).Error
 
 	tx := db.DB.Begin()
-	added := 0
+	var rows []model.Question
 	for i, reqQ := range bankToQuestionReqs(selected) {
 		if strings.TrimSpace(reqQ.Content) == "" {
 			continue
@@ -569,7 +572,7 @@ func ImportBankQuestions(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid options for question %d", i+1)})
 			return
 		}
-		q := model.Question{
+		rows = append(rows, model.Question{
 			QuizID:        quiz.ID,
 			Content:       reqQ.Content,
 			Type:          reqQ.Type,
@@ -578,14 +581,16 @@ func ImportBankQuestions(c *gin.Context) {
 			Duration:      reqQ.Duration,
 			Points:        reqQ.Points,
 			Order:         maxOrder + i + 1,
-		}
-		if err := tx.Create(&q).Error; err != nil {
+		})
+	}
+	if len(rows) > 0 {
+		if err := tx.CreateInBatches(&rows, questionInsertBatch).Error; err != nil {
 			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to import questions"})
 			return
 		}
-		added++
 	}
+	added := len(rows)
 	if err := tx.Commit().Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit import"})
 		return

@@ -97,6 +97,7 @@ func AutoMigrate() {
 	}
 
 	log.Println("Database auto-migration completed.")
+	dropSupersededIndexes()
 
 	// Seed default data
 	seedDefaultData()
@@ -439,6 +440,21 @@ func backfillFreeSubscriptions() {
 	}
 	if res.RowsAffected > 0 {
 		log.Printf("Backfilled free subscriptions for %d user(s).", res.RowsAffected)
+	}
+}
+
+// dropSupersededIndexes removes indexes a newer one in the model replaced.
+// AutoMigrate only ever adds indexes, so a retired one stays behind and keeps
+// costing every INSERT until dropped here. Idempotent.
+//
+// Runs after AutoMigrate, so the replacement exists before the old one goes.
+func dropSupersededIndexes() {
+	for _, name := range []string{
+		"idx_answer_logs_room_id", // → idx_answer_room_question (room_id, question_id, selected_option)
+	} {
+		if err := DB.Exec(`DROP INDEX IF EXISTS ` + name).Error; err != nil {
+			log.Printf("Failed to drop superseded index %s: %v", name, err)
+		}
 	}
 }
 

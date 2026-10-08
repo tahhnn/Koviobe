@@ -109,8 +109,10 @@ type Room struct {
 	ID                   uint           `gorm:"primaryKey" json:"id"`
 	PinCode              string         `gorm:"size:10;uniqueIndex;not null" json:"pin_code"`
 	QuizID               uint           `gorm:"not null" json:"quiz_id"`
-	HostID               uint           `gorm:"not null" json:"host_id"`
-	Status               string         `gorm:"size:50;default:'waiting'" json:"status"` // waiting, active, finished
+	// idx_rooms_host_status serves "this host's open rooms" (CreateRoom's
+	// concurrency cap, license usage and expiry, the logs list, admin stats).
+	HostID               uint           `gorm:"not null;index:idx_rooms_host_status,priority:1" json:"host_id"`
+	Status               string         `gorm:"size:50;default:'waiting';index:idx_rooms_host_status,priority:2" json:"status"` // waiting, active, finished
 	// EndedReason is why the room closed: "" (the host ended it, or solo mode
 	// finished), license_expired, license_revoked. No `default:` tag — "" is the
 	// meaningful normal case, and GORM omits zero values on columns that have one.
@@ -146,12 +148,17 @@ type Player struct {
 }
 
 // AnswerLog records the submissions of players.
+//
+// idx_answer_room_question replaced the single-column room_id index
+// (db.dropSupersededIndexes): it still serves every room_id filter, and
+// also the per-question poll tally (pollOptionStats). One index either
+// way, so the submit INSERT maintains no more than before.
 type AnswerLog struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
-	RoomID         uint      `gorm:"index;not null" json:"room_id"`
+	RoomID         uint      `gorm:"not null;index:idx_answer_room_question,priority:1" json:"room_id"`
 	PlayerID       uint      `gorm:"uniqueIndex:idx_player_question;not null" json:"player_id"`
-	QuestionID     uint      `gorm:"uniqueIndex:idx_player_question;not null" json:"question_id"`
-	SelectedOption string    `gorm:"size:50;not null" json:"selected_option"`
+	QuestionID     uint      `gorm:"uniqueIndex:idx_player_question;not null;index:idx_answer_room_question,priority:2" json:"question_id"`
+	SelectedOption string    `gorm:"size:50;not null;index:idx_answer_room_question,priority:3" json:"selected_option"`
 	IsCorrect      bool      `json:"is_correct"`
 	PointsEarned   int       `json:"points_earned"`
 	ResponseTimeMs int       `json:"response_time_ms"`

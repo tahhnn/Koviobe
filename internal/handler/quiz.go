@@ -199,6 +199,9 @@ func CreateQuiz(c *gin.Context) {
 		return
 	}
 
+	// Validated one by one, inserted in one statement: a 100-question quiz used
+	// to be 100 INSERT round trips inside this transaction.
+	newQuestions := make([]model.Question, 0, len(req.Questions))
 	for idx, q := range req.Questions {
 		if err := validateCorrectAnswer(q.Type, q.CorrectAnswer, q.Options); err != nil {
 			tx.Rollback()
@@ -223,7 +226,7 @@ func CreateQuiz(c *gin.Context) {
 			}
 		}
 
-		question := model.Question{
+		newQuestions = append(newQuestions, model.Question{
 			QuizID:        quiz.ID,
 			Content:       q.Content,
 			Type:          q.Type,
@@ -233,9 +236,10 @@ func CreateQuiz(c *gin.Context) {
 			Points:        q.Points,
 			Order:         q.Order,
 			Explanation:   explanation,
-		}
-
-		if err := tx.Create(&question).Error; err != nil {
+		})
+	}
+	if len(newQuestions) > 0 {
+		if err := tx.CreateInBatches(&newQuestions, questionInsertBatch).Error; err != nil {
 			tx.Rollback()
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create questions"})
 			return
@@ -253,6 +257,12 @@ func CreateQuiz(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, quiz)
 }
+
+// questionInsertBatch caps the rows per INSERT when a quiz's questions are
+// written together. 100 is the Pro plan's per-quiz maximum, so in practice
+// every quiz is one statement; the cap keeps a larger one under Postgres's
+// 65535 bind-parameter limit (11 columns a row).
+const questionInsertBatch = 100
 
 func ListQuizzes(c *gin.Context) {
 	userID, _ := c.Get("user_id")
@@ -582,6 +592,7 @@ func UpdateRoomPrivacy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update privacy"})
 		return
 	}
+	invalidateRoomState(room.ID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":         room.ID,
@@ -607,11 +618,38 @@ func ListPublicRooms(c *gin.Context) {
 		return
 	}
 
+	// One grouped count for the whole page and one licence lookup per host, not
+	// one of each per room: 30 rooms used to cost up to ~90 queries.
+	countByRoom := make(map[uint]int64, len(rooms))
+	entsByHost := make(map[uint]license.Entitlements)
+	if len(rooms) > 0 {
+		ids := make([]uint, len(rooms))
+		for i, r := range rooms {
+			ids[i] = r.ID
+		}
+		type countRow struct {
+			RoomID uint
+			N      int64
+		}
+		var rows []countRow
+		db.DB.Model(&model.Player{}).
+			Select("room_id, count(*) AS n").
+			Where("room_id IN ? AND is_connected = ?", ids, true).
+			Group("room_id").
+			Scan(&rows)
+		for _, r := range rows {
+			countByRoom[r.RoomID] = r.N
+		}
+	}
+
 	out := make([]publicRoom, 0, len(rooms))
 	for _, room := range rooms {
-		var playerCount int64
-		db.DB.Model(&model.Player{}).Where("room_id = ? AND is_connected = ?", room.ID, true).Count(&playerCount)
-		ents, _ := license.GetEntitlements(room.HostID)
+		playerCount := countByRoom[room.ID]
+		ents, seen := entsByHost[room.HostID]
+		if !seen {
+			ents, _ = license.GetEntitlements(room.HostID)
+			entsByHost[room.HostID] = ents
+		}
 		title := room.Quiz.Title
 		if title == "" {
 			title = "Open quiz"
@@ -882,6 +920,7 @@ func StartGame(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start game"})
 		return
 	}
+	invalidateRoomState(room.ID)
 
 	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "game:started", gin.H{
 		"room_id": room.ID,
@@ -917,25 +956,43 @@ func NextQuestion(c *gin.Context) {
 		return
 	}
 
-	var quiz model.Quiz
-	db.DB.Preload("Questions", func(db *gorm.DB) *gorm.DB {
-		return db.Order("questions.order ASC, questions.id ASC")
-	}).First(&quiz, room.QuizID)
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
+		return
+	}
+	questions := qset.list
 
 	nextIndex := room.CurrentQuestionIndex + 1
-	if nextIndex >= len(quiz.Questions) {
+	if nextIndex >= len(questions) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No more questions. Use EndGame to close room."})
 		return
 	}
 
-	activeQuestion := quiz.Questions[nextIndex]
+	activeQuestion := questions[nextIndex]
 	activeAt := time.Now()
 	activeUntil := activeAt.Add(time.Duration(activeQuestion.Duration) * time.Second)
 
 	room.CurrentQuestionIndex = nextIndex
 	room.CurrentQuestionID = &activeQuestion.ID
 	room.QuestionActiveUntil = &activeUntil
-	db.DB.Save(&room)
+	// Only the columns this step owns. Save wrote the whole row back from the
+	// copy read above, so a finalize landing in between was silently undone
+	// (status back to active). The status guard keeps a finished room finished.
+	res := db.DB.Model(&model.Room{}).Where("id = ? AND status = ?", room.ID, "active").Updates(map[string]interface{}{
+		"current_question_index": nextIndex,
+		"current_question_id":    activeQuestion.ID,
+		"question_active_until":  activeUntil,
+	})
+	invalidateRoomState(room.ID)
+	if res.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to activate question"})
+		return
+	}
+	if res.RowsAffected == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Room is not active"})
+		return
+	}
 
 	options := sanitizePlayerOptions(activeQuestion.Options)
 
@@ -948,7 +1005,7 @@ func NextQuestion(c *gin.Context) {
 		"active_at":    activeAt.UTC().Format(time.RFC3339),
 		"active_until": activeUntil.UTC().Format(time.RFC3339),
 		"index":        nextIndex,
-		"total":        len(quiz.Questions),
+		"total":        len(questions),
 	})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1532,11 +1589,25 @@ func SubmitAnswer(c *gin.Context) {
 	// here; finalizeRoom's atomic status claim makes concurrent last-submits
 	// (or a simultaneous host EndGame click) safe.
 	if isPlayerPaced && playerFinished {
-		var unfinished int64
-		db.DB.Model(&model.Player{}).
-			Where("room_id = ? AND current_question_id IS NOT NULL", room.ID).
-			Count(&unfinished)
-		if unfinished == 0 {
+		// Only "is anyone left" matters, so stop at the first unfinished row.
+		// COUNT walked the whole room on every finisher, O(room²) per game —
+		// 5.2ms mean, measured 2026-09-24.
+		//
+		// The ORDER BY is what makes it stop early. A bare EXISTS let the planner
+		// pick a seq scan of all players, betting a match turns up anywhere in
+		// the table; rows are clustered by room, so it read every other room
+		// first (9ms vs 0.1ms on 62k players). Ordering by idx_room_nickname's
+		// columns pins it to this room's slice of that index.
+		//
+		// No index on current_question_id on purpose: it changes on every solo
+		// submit, and an index on it would cost those updates their HOT path.
+		var left []int
+		res := db.DB.Raw(`SELECT 1 FROM players WHERE room_id = ? AND current_question_id IS NOT NULL
+			ORDER BY room_id, nickname LIMIT 1`, room.ID).Scan(&left)
+		// An error leaves the answer unknown: do not finish on it. The host's
+		// End button and the abandoned-room cron still close the room.
+		anyLeft := res.Error != nil || len(left) > 0
+		if !anyLeft {
 			go func(roomID, hostID uint) {
 				if _, alreadyEnded, err := finalizeRoom(roomID, EndReasonHost); err != nil {
 					log.Printf("[SubmitAnswer] solo auto-finish failed for room %d: %v", roomID, err)
@@ -1580,7 +1651,13 @@ func SubmitAnswer(c *gin.Context) {
 
 // pollOptionStats tallies AnswerLog rows for a poll question into a per-option
 // vote count + percentage breakdown, ordered the same as the question's options.
-func pollOptionStats(questionID uint, optionsJSON string) ([]gin.H, int) {
+//
+// Scoped to the room: a quiz's question ids are shared by every room running
+// that quiz, so filtering on question_id alone added another live room's votes
+// to this one — and, with no index leading on question_id, scanned the whole
+// answer_logs table to do it. idx_answer_room_question serves it from the
+// room's and question's slice of the index (62ms → 0.7–6.6ms on 400k rows).
+func pollOptionStats(roomID, questionID uint, optionsJSON string) ([]gin.H, int) {
 	var opts []struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
@@ -1594,7 +1671,7 @@ func pollOptionStats(questionID uint, optionsJSON string) ([]gin.H, int) {
 	var counts []voteCount
 	db.DB.Model(&model.AnswerLog{}).
 		Select("selected_option, count(*) as count").
-		Where("question_id = ?", questionID).
+		Where("room_id = ? AND question_id = ?", roomID, questionID).
 		Group("selected_option").
 		Scan(&counts)
 
@@ -1648,7 +1725,12 @@ func EndQuestion(c *gin.Context) {
 	}
 
 	var question model.Question
-	db.DB.First(&question, *room.CurrentQuestionID)
+	if qset, err := quizQuestions(room.QuizID); err == nil {
+		question, _, _ = qset.byID(*room.CurrentQuestionID)
+	}
+	if question.ID == 0 {
+		db.DB.First(&question, *room.CurrentQuestionID)
+	}
 
 	type PlayerScore struct {
 		ID       uint   `json:"id"`
@@ -1659,7 +1741,7 @@ func EndQuestion(c *gin.Context) {
 	db.DB.Model(&model.Player{}).
 		Select("id, nickname, score").
 		Where("room_id = ?", room.ID).
-		Order("score DESC").
+		Order("score DESC, id ASC"). // same tie-break as roomSnapshot, so the reveal and the board agree
 		Limit(5).
 		Scan(&leaderboard)
 
@@ -1675,14 +1757,16 @@ func EndQuestion(c *gin.Context) {
 	if question.Type != "poll" {
 		endedPayload["correct_answer"] = question.CorrectAnswer
 	} else {
-		optionStats, totalVotes := pollOptionStats(question.ID, question.Options)
+		optionStats, totalVotes := pollOptionStats(room.ID, question.ID, question.Options)
 		endedPayload["option_stats"] = optionStats
 		endedPayload["total_votes"] = totalVotes
 	}
 	realtime.Client.Publish(fmt.Sprintf("rooms:%s", room.PinCode), "question:ended", endedPayload)
 
 	room.QuestionActiveUntil = nil
-	db.DB.Save(&room)
+	// One column, not the whole row back from the copy read above (see NextQuestion).
+	db.DB.Model(&model.Room{}).Where("id = ?", room.ID).Update("question_active_until", nil)
+	invalidateRoomState(room.ID)
 
 	resp := gin.H{
 		"message":         "Question ended",
@@ -2096,6 +2180,7 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 	if claim.Error != nil {
 		return nil, false, claim.Error
 	}
+	invalidateRoomState(room.ID)
 	if claim.RowsAffected == 0 {
 		// Already finished. The only reason anyone asks a second time is that a
 		// client never acted on the first game:ended — a host tab that missed the
@@ -2143,7 +2228,7 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 
 	// Archive to game_sessions (permanent record). If this fails the transient
 	// rows below are the only remaining copy, so the cleanup is skipped.
-	archiveErr := archiveGameLogs(room, rankings)
+	archiveErr := archiveGameLogs(room, rankings, len(players))
 	if archiveErr != nil {
 		log.Printf("[finalizeRoom] archive failed for room %d, keeping players and answer logs: %v", room.ID, archiveErr)
 		notify.P1("finalize_archive_failed", "Archive khi kết thúc phòng thất bại (room=%d): %v — kết quả trận đấu có nguy cơ mất.", room.ID, archiveErr)
@@ -2197,22 +2282,20 @@ func archivedRankings(roomID uint) []finalRanking {
 	return rankings
 }
 
-func archiveGameLogs(room model.Room, rankings interface{}) error {
+// playerCount is the number of player rows the rankings were built from; the
+// caller already holds them, so there is no second COUNT of the room here.
+func archiveGameLogs(room model.Room, rankings interface{}, playerCount int) error {
 	rankingsJSON, err := json.Marshal(rankings)
 	if err != nil {
 		return fmt.Errorf("marshal rankings for room %d: %w", room.ID, err)
 	}
-
-	// Count actual players in the room
-	var playerCount int64
-	db.DB.Model(&model.Player{}).Where("room_id = ?", room.ID).Count(&playerCount)
 
 	session := model.GameSession{
 		RoomID:      room.ID,
 		HostID:      room.HostID,
 		QuizID:      room.QuizID,
 		Rankings:    string(rankingsJSON),
-		PlayerCount: int(playerCount),
+		PlayerCount: playerCount,
 		EndedAt:     time.Now(),
 	}
 
@@ -2340,6 +2423,8 @@ func UpdateQuiz(c *gin.Context) {
 
 	// Track which question IDs are kept
 	keptIDs := make(map[uint]bool)
+	// New questions are collected and inserted in one statement after the loop.
+	var created []model.Question
 
 	// Update or Create questions
 	for idx, q := range req.Questions {
@@ -2406,23 +2491,29 @@ func UpdateQuiz(c *gin.Context) {
 			if explanation != nil {
 				question.Explanation = *explanation
 			}
-
-			if err := tx.Create(&question).Error; err != nil {
-				tx.Rollback()
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create question"})
-				return
-			}
+			created = append(created, question)
+		}
+	}
+	if len(created) > 0 {
+		if err := tx.CreateInBatches(&created, questionInsertBatch).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create question"})
+			return
 		}
 	}
 
-	// Delete questions that were not kept
+	// Delete questions that were not kept, in one statement
+	var dropped []uint
 	for _, eq := range existingQuestions {
 		if !keptIDs[eq.ID] {
-			if err := tx.Delete(&eq).Error; err != nil {
-				tx.Rollback()
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete old question"})
-				return
-			}
+			dropped = append(dropped, eq.ID)
+		}
+	}
+	if len(dropped) > 0 {
+		if err := tx.Where("quiz_id = ? AND id IN ?", quiz.ID, dropped).Delete(&model.Question{}).Error; err != nil {
+			tx.Rollback()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete old question"})
+			return
 		}
 	}
 
@@ -2498,8 +2589,10 @@ func GetRoom(c *gin.Context) {
 			return
 		}
 
-		var room model.Room
-		if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
+		// From the shared snapshot (room_state_cache.go): every player in the
+		// room polls this, and each poll used to read the same row again.
+		room, err := roomState(uint(roomID))
+		if err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
 			return
 		}
@@ -2625,9 +2718,7 @@ func GetRoom(c *gin.Context) {
 		}
 
 		var room model.Room
-		if err := db.DB.Preload("Quiz.Questions", func(db *gorm.DB) *gorm.DB {
-			return db.Order("questions.order ASC, questions.id ASC")
-		}).First(&room, uint(roomID)).Error; err != nil {
+		if err := db.DB.Preload("Quiz").First(&room, uint(roomID)).Error; err != nil {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
 			return
 		}
@@ -2635,6 +2726,17 @@ func GetRoom(c *gin.Context) {
 		if room.HostID != hostClaims.UserID {
 			c.JSON(http.StatusForbidden, gin.H{"error": "You do not own this room"})
 			return
+		}
+		// The questions come from the shared cache rather than a Preload: the
+		// host screen polls this every 2s. Same order, same rows; the slice is
+		// shared, so it is only ever read (here, by the JSON encoder).
+		if room.Quiz.ID != 0 {
+			qset, err := quizQuestions(room.QuizID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load questions"})
+				return
+			}
+			room.Quiz.Questions = qset.list
 		}
 
 		players := getRoomPlayers(room.ID, room.Status)
@@ -2778,11 +2880,11 @@ func ensureSoloQuestionAssigned(room *model.Room, pl *model.Player) {
 	if answered > 0 {
 		return // genuinely finished
 	}
-	var first model.Question
-	if err := db.DB.Where("quiz_id = ?", room.QuizID).
-		Order("questions.order ASC, questions.id ASC").First(&first).Error; err != nil {
+	qset, err := quizQuestions(room.QuizID)
+	if err != nil || len(qset.list) == 0 {
 		return
 	}
+	first := qset.list[0]
 	if err := db.DB.Model(pl).UpdateColumns(map[string]interface{}{
 		"current_question_id":   first.ID,
 		"question_active_until": nil,
@@ -2825,8 +2927,10 @@ func GetPlayerQuestion(c *gin.Context) {
 		return
 	}
 
-	var room model.Room
-	if err := db.DB.First(&room, uint(roomID)).Error; err != nil {
+	// Shared snapshot: a whole room fetches the question pushed by NextQuestion
+	// in the same second, and NextQuestion invalidates it before that push.
+	room, err := roomState(uint(roomID))
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Room not found"})
 		return
 	}
