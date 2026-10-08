@@ -129,7 +129,6 @@ var vi = map[string]string{
 	"Online checkout is not available":                         "Thanh toán online đang tạm đóng, vui lòng liên hệ Zalo để mua",
 	"Checkout is not configured on the server":                 "Máy chủ chưa cấu hình tài khoản nhận tiền / SePay",
 	"Product is not available":                                 "Gói này hiện không bán",
-	"Your account already has this plan with no expiry":        "Tài khoản đã có gói này vĩnh viễn, không cần mua thêm",
 	"Order not found":                                          "Không tìm thấy đơn",
 	"Order is no longer pending":                               "Đơn không còn ở trạng thái chờ thanh toán",
 	"Order is already paid":                                    "Đơn đã được thanh toán",

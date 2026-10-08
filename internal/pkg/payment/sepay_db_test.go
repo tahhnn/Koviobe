@@ -10,7 +10,6 @@ import (
 
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
-	"github.com/quizzzone/backend/internal/pkg/license"
 )
 
 var hookID atomic.Int64
@@ -41,12 +40,6 @@ func reload(t *testing.T, code string) model.PaymentOrder {
 	return o
 }
 
-func countEvents(t *testing.T, code string) int64 {
-	var n int64
-	db.DB.Model(&model.SubscriptionEvent{}).Where("source_ref = ?", code).Count(&n)
-	return n
-}
-
 func TestSePayExactPaymentGrants(t *testing.T) {
 	setupDB(t)
 	uid := newUser(t, "a@x.vn", "free", nil)
@@ -62,17 +55,16 @@ func TestSePayExactPaymentGrants(t *testing.T) {
 	if got.Status != model.OrderPaid || got.PaidAmountVND != 199000 {
 		t.Fatalf("order %+v", got)
 	}
-	var ev model.SubscriptionEvent
-	must(t, db.DB.Where("source_ref = ?", o.OrderCode).First(&ev).Error)
-	if ev.Source != license.SourcePaymentSePay || ev.AmountVND != 199000 || ev.Action != "grant" {
-		t.Fatalf("event %+v", ev)
+	code := paidCode(t, &got)
+	if code.AmountVND != 199000 || code.CreatedBy != 0 || code.ExternalRef == "" || code.MaxUses != 1 {
+		t.Fatalf("code %+v", code)
 	}
 
 	// SePay retries the same id: nothing new happens.
 	out2, err := ApplySePay(w.Transaction([]byte(`{}`)))
 	must(t, err)
-	if !out2.Duplicate || countEvents(t, o.OrderCode) != 1 {
-		t.Fatalf("replay outcome %+v events %d", out2, countEvents(t, o.OrderCode))
+	if !out2.Duplicate || countCodes(t, o.OrderCode) != 1 {
+		t.Fatalf("replay outcome %+v events %d", out2, countCodes(t, o.OrderCode))
 	}
 }
 
@@ -114,8 +106,8 @@ func TestSePayWrongAmountGoesToReview(t *testing.T) {
 	// Top-up: still review (never auto-grant), amount accumulates.
 	apply(t, hook(o.OrderCode, 99000))
 	got = reload(t, o.OrderCode)
-	if got.Status != model.OrderNeedsReview || got.PaidAmountVND != 199000 || countEvents(t, o.OrderCode) != 0 {
-		t.Fatalf("after top-up %+v events %d", got, countEvents(t, o.OrderCode))
+	if got.Status != model.OrderNeedsReview || got.PaidAmountVND != 199000 || countCodes(t, o.OrderCode) != 0 {
+		t.Fatalf("after top-up %+v events %d", got, countCodes(t, o.OrderCode))
 	}
 }
 
@@ -153,10 +145,9 @@ func TestSePayIgnoredAndUnmatched(t *testing.T) {
 	if !att.Paid || att.Status != model.TxnAttached {
 		t.Fatalf("attach outcome %+v", att)
 	}
-	var ev model.SubscriptionEvent
-	must(t, db.DB.Where("source_ref = ?", o.OrderCode).First(&ev).Error)
-	if ev.Source != license.SourcePaymentManual || ev.ActorUserID != 5 {
-		t.Fatalf("event %+v", ev)
+	attached := reload(t, o.OrderCode)
+	if code := paidCode(t, &attached); code.CreatedBy != 5 {
+		t.Fatalf("code %+v", code)
 	}
 	if _, err := AttachTransaction(tx.ID, o.OrderCode, 5, "again"); !errors.Is(err, ErrTxnNotOpen) {
 		t.Fatalf("second attach: %v", err)
@@ -195,8 +186,8 @@ func TestSePayDuplicatePaymentAndDismiss(t *testing.T) {
 	must(t, err)
 	apply(t, hook(o.OrderCode, 199000))
 	out, tx := apply(t, hook(o.OrderCode, 199000))
-	if out.Status != model.TxnDuplicatePayment || !out.NeedsHuman() || countEvents(t, o.OrderCode) != 1 {
-		t.Fatalf("second payment %+v events %d", out, countEvents(t, o.OrderCode))
+	if out.Status != model.TxnDuplicatePayment || !out.NeedsHuman() || countCodes(t, o.OrderCode) != 1 {
+		t.Fatalf("second payment %+v events %d", out, countCodes(t, o.OrderCode))
 	}
 	must(t, DismissTransaction(tx.ID, 5, "refunded"))
 	open, err := ListTransactions(TxnFilter{Status: "open"})
@@ -228,8 +219,8 @@ func TestSePayConcurrentDeliveries(t *testing.T) {
 	wg.Wait()
 	var rows int64
 	db.DB.Model(&model.BankTransaction{}).Where("provider_txn_id = ?", fmt.Sprint(w.ID)).Count(&rows)
-	if rows != 1 || countEvents(t, o.OrderCode) != 1 {
-		t.Fatalf("same id: rows=%d events=%d", rows, countEvents(t, o.OrderCode))
+	if rows != 1 || countCodes(t, o.OrderCode) != 1 {
+		t.Fatalf("same id: rows=%d events=%d", rows, countCodes(t, o.OrderCode))
 	}
 
 	uid2 := newUser(t, "b@x.vn", "free", nil)
@@ -254,7 +245,7 @@ func TestSePayConcurrentDeliveries(t *testing.T) {
 		}(x)
 	}
 	wg.Wait()
-	if paid.Load() != 1 || dup.Load() != 1 || countEvents(t, o2.OrderCode) != 1 {
-		t.Fatalf("race: paid=%d dup=%d events=%d", paid.Load(), dup.Load(), countEvents(t, o2.OrderCode))
+	if paid.Load() != 1 || dup.Load() != 1 || countCodes(t, o2.OrderCode) != 1 {
+		t.Fatalf("race: paid=%d dup=%d events=%d", paid.Load(), dup.Load(), countCodes(t, o2.OrderCode))
 	}
 }

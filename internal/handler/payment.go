@@ -148,7 +148,7 @@ func paymentError(c *gin.Context, err error) {
 	case errors.Is(err, payment.ErrProductUnavailable), errors.Is(err, payment.ErrConfirmFields),
 		errors.Is(err, payment.ErrTxnNoteMissing):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-	case errors.Is(err, payment.ErrCheckoutClosed), errors.Is(err, payment.ErrLifetimePlan),
+	case errors.Is(err, payment.ErrCheckoutClosed),
 		errors.Is(err, payment.ErrOrderNotPending), errors.Is(err, payment.ErrOrderAlreadyPaid),
 		errors.Is(err, payment.ErrOrderNotCancelable), errors.Is(err, payment.ErrCheckoutNotReady):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -189,12 +189,18 @@ func CreatePaymentOrder(c *gin.Context) {
 
 // GetPaymentOrder is what the checkout page polls. Owner only.
 func GetPaymentOrder(c *gin.Context) {
-	o, err := payment.GetUserOrder(c.GetUint("user_id"), c.Param("code"))
+	row, err := payment.UserOrderView(c.GetUint("user_id"), c.Param("code"))
 	if err != nil {
 		paymentError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, orderResponse(o))
+	// Same shape as orderResponse, with the code state the checkout page needs
+	// to offer "activate on this account" only while the code is unused.
+	h := gin.H{"order": row}
+	if row.Status == model.OrderPending {
+		h["checkout"] = payment.CheckoutFor(&row.PaymentOrder)
+	}
+	c.JSON(http.StatusOK, h)
 }
 
 // ListMyPaymentOrders returns the signed-in host's recent orders.

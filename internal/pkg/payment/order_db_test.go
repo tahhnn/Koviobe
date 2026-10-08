@@ -38,11 +38,12 @@ func setupDB(t *testing.T) {
 	}
 	db.DB = g
 	if err := g.AutoMigrate(&model.User{}, &model.PricingPlan{}, &model.Subscription{},
-		&model.SubscriptionEvent{}, &model.SystemSetting{}, &model.PaymentProduct{}, &model.PaymentOrder{}, &model.BankTransaction{}); err != nil {
+		&model.SubscriptionEvent{}, &model.SystemSetting{}, &model.PaymentProduct{}, &model.PaymentOrder{}, &model.BankTransaction{},
+		&model.LicenseCode{}, &model.LicenseRedemption{}); err != nil {
 		t.Fatal(err)
 	}
 	g.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_orders_one_pending ON payment_orders (user_id) WHERE status = 'pending'`)
-	g.Exec(`TRUNCATE users, pricing_plans, subscriptions, subscription_events, system_settings, payment_products, payment_orders, bank_transactions RESTART IDENTITY CASCADE`)
+	g.Exec(`TRUNCATE users, pricing_plans, subscriptions, subscription_events, system_settings, payment_products, payment_orders, bank_transactions, license_codes, license_redemptions RESTART IDENTITY CASCADE`)
 
 	must(t, g.Create(&model.PricingPlan{ID: "free", Name: "Free", IsActive: true}).Error)
 	must(t, g.Create(&model.PricingPlan{ID: "pro", Name: "Pro", IsActive: true, MaxPlayersPerRoom: 2000}).Error)
@@ -119,10 +120,12 @@ func TestCheckoutClosed(t *testing.T) {
 	}
 }
 
-func TestLifetimeHostCannotBuy(t *testing.T) {
+// A lifetime-Pro host may still buy: the purchase is a code, which can be
+// redeemed on another account.
+func TestLifetimeHostCanBuyACode(t *testing.T) {
 	setupDB(t)
 	uid := newUser(t, "a@x.vn", "pro", nil)
-	if _, err := CreateOrder(uid, "pro_1m"); !errors.Is(err, ErrLifetimePlan) {
+	if _, err := CreateOrder(uid, "pro_1m"); err != nil {
 		t.Fatalf("err=%v", err)
 	}
 }
@@ -143,18 +146,36 @@ func TestAdminConfirmStacksAndRecords(t *testing.T) {
 		t.Fatalf("bad paid order %+v", paid)
 	}
 
+	// Paying grants nothing by itself: it mints one code carrying the money.
 	var sub model.Subscription
+	must(t, db.DB.Where("user_id = ?", uid).First(&sub).Error)
+	if sub.EndsAt == nil || sub.EndsAt.Sub(in10).Abs() > time.Minute {
+		t.Fatalf("paying must not touch the subscription: ends_at=%v", sub.EndsAt)
+	}
+	code := paidCode(t, paid)
+	if code.MaxUses != 1 || code.DurationDays != 30 || code.AmountVND != 199000 || code.ExternalRef != "FT1" ||
+		code.CreatedBy != 7 || code.Batch != "order:"+o.OrderCode {
+		t.Fatalf("bad code %+v", code)
+	}
+
+	// Redeeming it on the buyer's account stacks onto the 10 days left.
+	_, _, err = license.RedeemCode(uid, code.Code, "127.0.0.1")
+	must(t, err)
 	must(t, db.DB.Where("user_id = ?", uid).First(&sub).Error)
 	want := in10.AddDate(0, 0, 30)
 	if sub.EndsAt == nil || sub.EndsAt.Sub(want).Abs() > time.Minute {
 		t.Fatalf("ends_at=%v want ≈%v (10 days left + 30)", sub.EndsAt, want)
 	}
-
 	var ev model.SubscriptionEvent
 	must(t, db.DB.Order("id DESC").First(&ev).Error)
-	if ev.Source != license.SourcePaymentManual || ev.SourceRef != o.OrderCode || ev.AmountVND != 199000 ||
+	if ev.Source != license.SourceCodeRedeem || ev.SourceRef != code.Code || ev.AmountVND != 199000 ||
 		ev.ExternalRef != "FT1" || ev.Action != "renew" {
 		t.Fatalf("bad event %+v", ev)
+	}
+	row, err := UserOrderView(uid, o.OrderCode)
+	must(t, err)
+	if !row.CodeUsed || !row.RedeemedByMe {
+		t.Fatalf("order view after redeem %+v", row)
 	}
 
 	if _, err := AdminConfirm(o.OrderCode, ConfirmInput{AmountVND: 1, ExternalRef: "x", Note: "x"}); !errors.Is(err, ErrOrderAlreadyPaid) {
@@ -193,10 +214,8 @@ func TestConcurrentConfirmGrantsOnce(t *testing.T) {
 	if ok != 1 || already != 7 {
 		t.Fatalf("ok=%d already=%d", ok, already)
 	}
-	var n int64
-	db.DB.Model(&model.SubscriptionEvent{}).Where("source_ref = ?", o.OrderCode).Count(&n)
-	if n != 1 {
-		t.Fatalf("events=%d want 1", n)
+	if n := countCodes(t, o.OrderCode); n != 1 {
+		t.Fatalf("codes=%d want 1", n)
 	}
 }
 
@@ -253,4 +272,23 @@ func TestExpireAndCancel(t *testing.T) {
 	if _, err := AdminCancel(o2.OrderCode, "no payment", 1); err != nil {
 		t.Fatalf("admin cancel expired: %v", err)
 	}
+}
+
+// paidCode loads the activation code a paid order minted.
+func paidCode(t *testing.T, o *model.PaymentOrder) model.LicenseCode {
+	t.Helper()
+	if o.LicenseCode == "" {
+		t.Fatalf("paid order %s has no code", o.OrderCode)
+	}
+	var c model.LicenseCode
+	must(t, db.DB.Where("code = ?", o.LicenseCode).First(&c).Error)
+	return c
+}
+
+// countCodes counts codes minted for an order: exactly one per paid order.
+func countCodes(t *testing.T, orderCode string) int64 {
+	t.Helper()
+	var n int64
+	db.DB.Model(&model.LicenseCode{}).Where("batch = ?", "order:"+orderCode).Count(&n)
+	return n
 }

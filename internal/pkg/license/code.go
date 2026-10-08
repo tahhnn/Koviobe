@@ -93,6 +93,14 @@ type GenerateOptions struct {
 // whole batch. A collision is astronomically unlikely, but retrying one row is
 // cheaper than losing 500.
 func GenerateCodes(opts GenerateOptions) ([]model.LicenseCode, error) {
+	return GenerateCodesTx(db.DB, opts)
+}
+
+// GenerateCodesTx is GenerateCodes inside a caller's transaction. The payment
+// package uses it so "order paid" and "code minted" commit together: a paid
+// order with no code is a customer who paid for nothing, and a minted code
+// with no paid order is a free licence.
+func GenerateCodesTx(tx *gorm.DB, opts GenerateOptions) ([]model.LicenseCode, error) {
 	if opts.Count < 1 || opts.Count > 500 {
 		return nil, errors.New("count must be between 1 and 500")
 	}
@@ -104,7 +112,7 @@ func GenerateCodes(opts GenerateOptions) ([]model.LicenseCode, error) {
 	}
 
 	var plan model.PricingPlan
-	if err := db.DB.Where("id = ? AND is_active = ?", opts.PlanID, true).First(&plan).Error; err != nil {
+	if err := tx.Where("id = ? AND is_active = ?", opts.PlanID, true).First(&plan).Error; err != nil {
 		return nil, errors.New("plan not found or inactive")
 	}
 	if opts.PlanID == PlanFree {
@@ -129,7 +137,7 @@ func GenerateCodes(opts GenerateOptions) ([]model.LicenseCode, error) {
 			ExternalRef:  opts.ExternalRef,
 			CreatedBy:    opts.CreatedBy,
 		}
-		res := db.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&code)
+		res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&code)
 		if res.Error != nil {
 			return nil, res.Error
 		}
@@ -196,7 +204,10 @@ func RedeemCode(userID uint, rawCode, ip string) (*model.Subscription, Entitleme
 			return err
 		}
 
-		opts := AssignOptions{}
+		// Every sale is a code now (QR checkout mints one), so a buyer who
+		// renews early by redeeming must keep the days they had: stack the
+		// term on a live term of the same plan, never restart it.
+		opts := AssignOptions{Extend: true}
 		if code.DurationDays > 0 {
 			d := code.DurationDays
 			opts.EndsAtDays = &d
