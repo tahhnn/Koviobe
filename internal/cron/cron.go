@@ -193,12 +193,14 @@ func cleanupAbandonedRooms() {
 		var existing model.GameSession
 		if db.DB.Where("room_id = ?", room.ID).First(&existing).Error != nil {
 			session := model.GameSession{
-				RoomID:      room.ID,
-				HostID:      room.HostID,
-				QuizID:      room.QuizID,
-				Rankings:    string(rankingsJSON),
-				PlayerCount: len(players),
-				EndedAt:     time.Now(),
+				RoomID:   room.ID,
+				HostID:   room.HostID,
+				QuizID:   room.QuizID,
+				Rankings: string(rankingsJSON),
+				// Before the deletes below, same as finalizeRoom.
+				QuestionStats: handler.QuestionStatsJSON(room, len(players)),
+				PlayerCount:   len(players),
+				EndedAt:       time.Now(),
 			}
 			// The archive is the only surviving copy once the deletes below run,
 			// so a failed archive must not be followed by a cleanup.
