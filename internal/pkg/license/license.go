@@ -77,6 +77,9 @@ const (
 	// SourcePaymentSePay is a bank transfer matched to an order by the SePay
 	// webhook — granted with no human in the loop.
 	SourcePaymentSePay = "payment_sepay"
+	// SourcePaymentGateway is an order SePay's Payment Gateway reported paid
+	// through its IPN — also with no human in the loop.
+	SourcePaymentGateway = "payment_sepay_pg"
 	// SourcePaymentManual is an admin settling a payment order the webhook
 	// could not match on its own (wrong amount, late, unreadable content).
 	SourcePaymentManual = "payment_manual"

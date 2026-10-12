@@ -132,6 +132,9 @@ func main() {
 		// SePay bank-transfer webhook. No user auth: SePay authenticates with
 		// "Authorization: Apikey <SEPAY_API_KEY>", checked in the handler.
 		api.POST("/payments/webhook/sepay", middleware.SePayWebhookGuard(), handler.SePayWebhook)
+		// SePay Payment Gateway IPN. Authenticated by X-Secret-Key; same IP
+		// allowlist and rate limit as the bank webhook (both come from SePay).
+		api.POST("/payments/ipn/sepay-pg", middleware.SePayWebhookGuard(), handler.SePayGatewayIPN)
 
 		// Realtime tokens — require host JWT or player JWT (no open public minting)
 		api.GET("/realtime/token", handler.GetRealtimeToken)

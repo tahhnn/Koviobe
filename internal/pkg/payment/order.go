@@ -39,6 +39,9 @@ var (
 // Checked before checkout can be switched on, so the switch cannot open a
 // checkout that shows a QR for an empty account.
 func CheckoutConfigured() bool {
+	if UsesGateway() {
+		return gatewayConfigured()
+	}
 	c := config.AppConfig
 	return c != nil && c.PaymentBankName != "" && c.PaymentBankAccount != "" &&
 		c.PaymentQRImageBase != "" && c.SePayAPIKey != ""
@@ -389,19 +392,25 @@ func ListAdminOrders(f AdminOrderFilter) ([]AdminOrderRow, error) {
 	return rows, err
 }
 
-// CheckoutInfo is what the buyer needs to pay an order.
+// CheckoutInfo is what the buyer needs to pay an order: either the bank
+// transfer details (direct transfer), or the signed form for SePay's hosted
+// payment page (Gateway, when PAYMENT_PROVIDER=sepay_pg).
 type CheckoutInfo struct {
-	BankName        string `json:"bank_name"`
-	BankAccount     string `json:"bank_account"`
-	BankHolder      string `json:"bank_holder,omitempty"`
-	TransferContent string `json:"transfer_content"`
-	QRURL           string `json:"qr_url"`
+	BankName        string       `json:"bank_name,omitempty"`
+	BankAccount     string       `json:"bank_account,omitempty"`
+	BankHolder      string       `json:"bank_holder,omitempty"`
+	TransferContent string       `json:"transfer_content,omitempty"`
+	QRURL           string       `json:"qr_url,omitempty"`
+	Gateway         *GatewayForm `json:"gateway,omitempty"`
 }
 
-// CheckoutFor builds the transfer details for an order from server config.
+// CheckoutFor builds the payment details for an order from server config.
 // The QR encodes the exact amount and the order code as content, so a buyer who
 // scans it cannot get either wrong.
 func CheckoutFor(o *model.PaymentOrder) CheckoutInfo {
+	if UsesGateway() {
+		return CheckoutInfo{Gateway: GatewayFormFor(o)}
+	}
 	c := config.AppConfig
 	if c == nil {
 		return CheckoutInfo{TransferContent: o.OrderCode}
