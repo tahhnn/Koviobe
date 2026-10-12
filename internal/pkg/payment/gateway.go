@@ -161,6 +161,10 @@ type GatewayIPN struct {
 		TransactionAmount   flexString `json:"transaction_amount"`
 		TransactionCurrency string     `json:"transaction_currency"`
 	} `json:"transaction"`
+	Customer struct {
+		ID         flexString `json:"id"`
+		CustomerID flexString `json:"customer_id"` // echoed back; we set it to the order's user id
+	} `json:"customer"`
 }
 
 const (
@@ -316,6 +320,20 @@ func ApplyGatewayIPN(n GatewayIPN, raw []byte) (*model.BankTransaction, Outcome,
 		if !found {
 			out.Status = model.TxnUnmatched
 			return setTxn(tx, t, model.TxnUnmatched, nil, "")
+		}
+
+		// Cross-check the buyer SePay echoes back against the order's owner. We
+		// put the user id in customer_id when signing the form, so a mismatch
+		// is a misrouted or tampered notification — flag it for a human instead
+		// of minting a code on it.
+		if cid := strings.TrimSpace(string(n.Customer.CustomerID)); cid != "" &&
+			cid != strconv.FormatUint(uint64(order.UserID), 10) {
+			out.Status, out.Order = model.TxnNeedsReview, &order
+			order.Status, order.ReviewReason = model.OrderNeedsReview, "customer_mismatch"
+			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+			return setTxn(tx, t, model.TxnNeedsReview, &order, clip("customer_id "+cid+" != order owner", 255))
 		}
 
 		status, paid, err := settle(tx, t, &order, license.GrantContext{

@@ -121,6 +121,8 @@ func main() {
 			auth.POST("/login", handler.Login)
 			auth.POST("/register", handler.Register)
 			auth.POST("/verify-otp", handler.VerifyOTP)
+			auth.POST("/forgot-password", handler.ForgotPassword)
+			auth.POST("/reset-password", handler.ResetPassword)
 			auth.POST("/refresh", handler.RefreshToken)
 			auth.POST("/logout", handler.Logout)
 		}

@@ -287,8 +287,8 @@ func StartPaymentExpiryWorker() {
 // Idle without SEPAY_API_TOKEN. A run that finds anything new is itself an
 // alert: it means webhooks are being lost.
 func StartPaymentReconcileWorker() {
-	if !payment.ReconcileConfigured() {
-		log.Println("Payment reconcile worker disabled (SEPAY_API_TOKEN or PAYMENT_BANK_ACCOUNT not set)")
+	if !paymentReconcileConfigured() {
+		log.Println("Payment reconcile worker disabled (no SePay reconcile credentials)")
 		return
 	}
 	log.Println("Starting payment reconcile worker...")
@@ -303,11 +303,26 @@ func StartPaymentReconcileWorker() {
 	}()
 }
 
-// RunPaymentReconcile performs one reconciliation over the given window.
+// paymentReconcileConfigured is true when either reconcile path can run: the
+// gateway's order API (when PAYMENT_PROVIDER=sepay_pg) or the bank list API.
+func paymentReconcileConfigured() bool {
+	return payment.GatewayReconcileConfigured() || payment.ReconcileConfigured()
+}
+
+// RunPaymentReconcile performs one reconciliation over the given window, using
+// whichever provider checkout runs on.
 func RunPaymentReconcile(window time.Duration) (payment.ReconcileResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	res, err := payment.Reconcile(ctx, time.Now().Add(-window), payment.AfterApplied)
+	var (
+		res payment.ReconcileResult
+		err error
+	)
+	if payment.GatewayReconcileConfigured() {
+		res, err = payment.ReconcileGateway(ctx, window, payment.AfterApplied)
+	} else {
+		res, err = payment.Reconcile(ctx, time.Now().Add(-window), payment.AfterApplied)
+	}
 	if err != nil {
 		log.Printf("[payment] reconcile failed: %v", err)
 		notify.P1("sepay-reconcile-failed", "Đối soát SePay thất bại: %v", err)
