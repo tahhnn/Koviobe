@@ -68,6 +68,12 @@ func AutoMigrate() {
 		log.Fatal("Database client is nil. Call InitPostgres first.")
 	}
 
+	// Probed before AutoMigrate creates them: both one-time steps below must run
+	// exactly once, on the boot that introduces email sharing, and never again
+	// — after that the values are the admin's and the owners' to change.
+	firstSharingBoot := !DB.Migrator().HasTable(&model.QuizCollaborator{})
+	planHadSharing := DB.Migrator().HasColumn(&model.PricingPlan{}, "allow_quiz_sharing")
+
 	// Auto migrate tables
 	err := DB.AutoMigrate(
 		&model.Permission{},
@@ -90,6 +96,7 @@ func AutoMigrate() {
 		&model.PaymentProduct{},
 		&model.PaymentOrder{},
 		&model.BankTransaction{},
+		&model.QuizCollaborator{},
 	)
 	if err != nil {
 		notify.Fatal("db_migrate", "AutoMigrate thất bại: %v — schema có thể đang dở dang, container sẽ exit(1).", err)
@@ -98,9 +105,86 @@ func AutoMigrate() {
 
 	log.Println("Database auto-migration completed.")
 	dropSupersededIndexes()
+	ensureQuizCollaboratorFK()
+	if !planHadSharing {
+		backfillProSharing()
+	}
+	if firstSharingBoot {
+		retirePublicQuizzes()
+	}
 
 	// Seed default data
 	seedDefaultData()
+}
+
+// ensureQuizCollaboratorFK ties collaborator rows to their quiz, so a quiz
+// removed outside DeleteQuiz cannot leave grants behind. Idempotent.
+func ensureQuizCollaboratorFK() {
+	if DB.Migrator().HasConstraint(&model.QuizCollaborator{}, "fk_quiz_collaborators_quiz") {
+		return
+	}
+	if err := DB.Exec(`ALTER TABLE quiz_collaborators
+		ADD CONSTRAINT fk_quiz_collaborators_quiz
+		FOREIGN KEY (quiz_id) REFERENCES quizzes(id) ON DELETE CASCADE`).Error; err != nil {
+		log.Printf("Failed to add fk_quiz_collaborators_quiz: %v", err)
+	}
+}
+
+// backfillProSharing turns sharing on for the existing Pro row on the boot that
+// adds the columns. seedPricingPlans never touches a row that already exists,
+// so without this the live Pro plan would get the column default (off) and the
+// feature would ship disabled for every paying host.
+func backfillProSharing() {
+	res := DB.Model(&model.PricingPlan{}).Where("id = ?", "pro").Updates(map[string]interface{}{
+		"allow_quiz_sharing":         true,
+		"max_collaborators_per_quiz": model.DefaultProCollaboratorsPerQuiz,
+	})
+	if res.Error != nil {
+		log.Printf("Failed to backfill Pro quiz sharing: %v", res.Error)
+		return
+	}
+	log.Printf("Backfilled quiz sharing on Pro plan (%d row)", res.RowsAffected)
+}
+
+// retirePublicQuizzes closes every quiz that the old flag opened to all hosts.
+// That flag is the leak email sharing replaces, so there is nothing to convert
+// it into: its owners re-share by email. Each closed quiz gets an audit row so
+// the owner's history shows why their quiz stopped being listed.
+func retirePublicQuizzes() {
+	var ids []uint
+	var owners []uint
+	rows, err := DB.Model(&model.Quiz{}).Unscoped().
+		Where("is_public = ? OR allow_edit = ?", true, true).
+		Select("id, host_id").Rows()
+	if err != nil {
+		log.Printf("Failed to list public quizzes: %v", err)
+		return
+	}
+	for rows.Next() {
+		var id, host uint
+		if err := rows.Scan(&id, &host); err == nil {
+			ids = append(ids, id)
+			owners = append(owners, host)
+		}
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return
+	}
+
+	if err := DB.Model(&model.Quiz{}).Unscoped().Where("id IN ?", ids).
+		Updates(map[string]interface{}{"is_public": false, "allow_edit": false}).Error; err != nil {
+		log.Printf("Failed to retire public quizzes: %v", err)
+		return
+	}
+	for i, id := range ids {
+		DB.Create(&model.AuditLog{
+			UserID:   owners[i],
+			Action:   "system_unshare_public_quiz",
+			Resource: fmt.Sprintf("quiz_%d", id),
+		})
+	}
+	log.Printf("Retired public sharing on %d quiz(zes): %v", len(ids), ids)
 }
 
 func seedDefaultData() {
@@ -342,22 +426,24 @@ func seedPricingPlans() {
 			SortOrder:            1,
 		},
 		{
-			ID:                   "pro",
-			Name:                 "Pro",
-			Description:          "Dành cho sự kiện / doanh nghiệp. Tới 2000 người/phòng, không watermark, player-paced, export logs.",
-			PriceMonthlyVND:      199000,
-			MaxPlayersPerRoom:    2000,
-			MaxQuizzes:           -1, // unlimited
-			MaxTemplates:         -1,
-			MaxConcurrentRooms:   10,
-			MaxQuestionsPerQuiz:  100,
-			AllowPlayerPaced:     true,
-			AllowCustomBranding:  true,
-			AllowExportLogs:      true,
-			AllowPrioritySupport: true,
-			AllowRemoveWatermark: true,
-			IsActive:             true,
-			SortOrder:            2,
+			ID:                      "pro",
+			Name:                    "Pro",
+			Description:             "Dành cho sự kiện / doanh nghiệp. Tới 2000 người/phòng, không watermark, player-paced, export logs.",
+			PriceMonthlyVND:         199000,
+			MaxPlayersPerRoom:       2000,
+			MaxQuizzes:              -1, // unlimited
+			MaxTemplates:            -1,
+			MaxConcurrentRooms:      10,
+			MaxQuestionsPerQuiz:     100,
+			AllowPlayerPaced:        true,
+			AllowCustomBranding:     true,
+			AllowExportLogs:         true,
+			AllowPrioritySupport:    true,
+			AllowRemoveWatermark:    true,
+			AllowQuizSharing:        true,
+			MaxCollaboratorsPerQuiz: model.DefaultProCollaboratorsPerQuiz,
+			IsActive:                true,
+			SortOrder:               2,
 		},
 	}
 
