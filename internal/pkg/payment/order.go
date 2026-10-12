@@ -33,6 +33,7 @@ var (
 	ErrOrderAlreadyPaid   = errors.New("Order is already paid")
 	ErrOrderNotCancelable = errors.New("Order cannot be cancelled")
 	ErrConfirmFields      = errors.New("amount_vnd, external_ref and note are required to confirm an order")
+	ErrTooManyOrders      = errors.New("Too many checkout attempts. Please finish or wait before starting another.")
 )
 
 // CheckoutConfigured reports whether the server holds everything a QR needs.
@@ -116,6 +117,22 @@ func createOrderOnce(userID uint, productID string) (*model.PaymentOrder, error)
 					Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
 					return err
 				}
+			}
+		}
+
+		// Past here a new row is minted, so the churn cap applies — the resume
+		// branch above returned already and never counts against it. Counted in
+		// the same transaction and under the pending-row lock, so parallel
+		// creates cannot slip past the cap together.
+		if cap := orderChurnCap(); cap > 0 {
+			var recent int64
+			if err := tx.Model(&model.PaymentOrder{}).
+				Where("user_id = ? AND created_at > ?", userID, now.Add(-time.Hour)).
+				Count(&recent).Error; err != nil {
+				return err
+			}
+			if recent >= int64(cap) {
+				return ErrTooManyOrders
 			}
 		}
 

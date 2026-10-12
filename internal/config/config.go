@@ -54,6 +54,14 @@ type Config struct {
 	// MaxPlayersPerRoomOpen is the room cap reported (and, once
 	// LICENSE_ENFORCEMENT is on, enforced) while license enforcement is off.
 	MaxPlayersPerRoomOpen int
+
+	// Payment abuse controls. A buyer who churns checkouts (create, cancel,
+	// create again) spends SePay order ids and clutters the ledger; past the
+	// cap CreateOrder refuses rather than mint another link. The cancel burst
+	// is only a signal — it never blocks a cancel, it raises a Telegram alert.
+	PaymentMaxOrdersPerHour     int
+	PaymentCancelAlertThreshold int
+	PaymentCancelAlertWindowMin int
 	// AuditRetentionDays: audit rows older than this are deleted daily, except
 	// admin_* and license_* which are kept (decision 2026-10-05: 365 days).
 	AuditRetentionDays int
@@ -176,6 +184,10 @@ func LoadConfig() {
 		JoinRateLimitPerMin:      getEnvInt("JOIN_RATE_LIMIT_PER_MIN", 2000),
 		PinLookupRateLimitPerMin: getEnvInt("PIN_LOOKUP_RATE_LIMIT_PER_MIN", 2000),
 		MaxPlayersPerRoomOpen:    getEnvInt("MAX_PLAYERS_PER_ROOM_OPEN", 2000),
+
+		PaymentMaxOrdersPerHour:     getEnvInt("PAYMENT_MAX_ORDERS_PER_HOUR", 10),
+		PaymentCancelAlertThreshold: getEnvInt("PAYMENT_CANCEL_ALERT_THRESHOLD", 5),
+		PaymentCancelAlertWindowMin: getEnvInt("PAYMENT_CANCEL_ALERT_WINDOW_MIN", 10),
 
 		TelegramBotToken:     getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:       getEnv("TELEGRAM_CHAT_ID", ""),

@@ -145,6 +145,8 @@ func paymentError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, payment.ErrTxnNotOpen):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, payment.ErrTooManyOrders):
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": err.Error()})
 	case errors.Is(err, payment.ErrProductUnavailable), errors.Is(err, payment.ErrConfirmFields),
 		errors.Is(err, payment.ErrTxnNoteMissing):
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -222,6 +224,9 @@ func CancelPaymentOrder(c *gin.Context) {
 		return
 	}
 	audit.Log(c, uid, "payment_order_cancel", o.OrderCode, nil)
+	// Signal only: a buyer who cancels many checkouts in a row raises an alert,
+	// never an error. c.GetString returns "" when the claim is absent.
+	payment.RegisterCancel(uid, c.GetString("email"))
 	c.JSON(http.StatusOK, orderResponse(o))
 }
 

@@ -264,6 +264,38 @@ func TestNewQRAfterExpiryKeepsLatePaymentAutomatic(t *testing.T) {
 	}
 }
 
+// Churning create/cancel is capped per hour, but reopening a live order (which
+// returns the same row, no new insert) never counts against the cap.
+func TestOrderChurnCap(t *testing.T) {
+	setupDB(t)
+	prev := config.AppConfig.PaymentMaxOrdersPerHour
+	config.AppConfig.PaymentMaxOrdersPerHour = 3
+	defer func() { config.AppConfig.PaymentMaxOrdersPerHour = prev }()
+	uid := newUser(t, "a@x.vn", "free", nil)
+
+	for i := 0; i < 3; i++ {
+		o, err := CreateOrder(uid, "pro_1m")
+		must(t, err)
+		// Reopen the same product: same row, must not consume the cap.
+		again, err := CreateOrder(uid, "pro_1m")
+		must(t, err)
+		if again.OrderCode != o.OrderCode {
+			t.Fatalf("reopen made a new order at i=%d", i)
+		}
+		if _, err := CancelUserOrder(uid, o.OrderCode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := CreateOrder(uid, "pro_1m"); !errors.Is(err, ErrTooManyOrders) {
+		t.Fatalf("4th create err=%v, want ErrTooManyOrders", err)
+	}
+
+	// A different user is unaffected.
+	if _, err := CreateOrder(newUser(t, "b@x.vn", "free", nil), "pro_1m"); err != nil {
+		t.Fatalf("other user blocked: %v", err)
+	}
+}
+
 func TestConcurrentCreateLeavesOnePending(t *testing.T) {
 	setupDB(t)
 	uid := newUser(t, "a@x.vn", "free", nil)
