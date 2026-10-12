@@ -77,7 +77,7 @@ func TestCodeAlphabetExcludesAmbiguousCharacters(t *testing.T) {
 func TestRedeemErrorsAreDistinct(t *testing.T) {
 	errs := []error{
 		ErrCodeNotFound, ErrCodeRevoked, ErrCodeExpired,
-		ErrCodeExhausted, ErrCodeAlreadyUsed, ErrCodePlanInactive,
+		ErrCodeExhausted, ErrCodeAlreadyUsed, ErrCodePlanInactive, ErrCodeLowerTier,
 	}
 	seen := map[string]bool{}
 	for _, e := range errs {

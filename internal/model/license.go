@@ -8,7 +8,7 @@ import (
 
 // PricingPlan defines subscription tiers and their entitlements.
 type PricingPlan struct {
-	ID                 string `gorm:"primaryKey;size:50" json:"id"` // free | pro
+	ID                 string `gorm:"primaryKey;size:50" json:"id"` // free | edu | pro | business
 	Name               string `gorm:"size:100;not null" json:"name"`
 	Description        string `gorm:"type:text" json:"description"`
 	PriceMonthlyVND    int    `gorm:"default:0" json:"price_monthly_vnd"`
@@ -31,13 +31,17 @@ type PricingPlan struct {
 	// own; the gate is on the owner. `default:0` matches Go's zero value, so
 	// GORM omitting a 0 on INSERT still stores 0, and AutoMigrate can add the
 	// NOT NULL column to a populated table.
-	AllowQuizSharing        bool           `gorm:"not null;default:false" json:"allow_quiz_sharing"`
-	MaxCollaboratorsPerQuiz int            `gorm:"not null;default:0" json:"max_collaborators_per_quiz"`
-	IsActive                bool           `gorm:"default:true" json:"is_active"`
-	SortOrder               int            `gorm:"default:0" json:"sort_order"`
-	CreatedAt               time.Time      `json:"created_at"`
-	UpdatedAt               time.Time      `json:"updated_at"`
-	DeletedAt               gorm.DeletedAt `gorm:"index" json:"-"`
+	AllowQuizSharing        bool `gorm:"not null;default:false" json:"allow_quiz_sharing"`
+	MaxCollaboratorsPerQuiz int  `gorm:"not null;default:0" json:"max_collaborators_per_quiz"`
+	// ContactSales marks a plan sold by talking to a person (Business): the
+	// pricing page shows a contact button instead of terms, and the plan is
+	// granted by an admin. It also stands for "customised on request".
+	ContactSales bool           `gorm:"not null;default:false" json:"contact_sales"`
+	IsActive     bool           `gorm:"default:true" json:"is_active"`
+	SortOrder    int            `gorm:"default:0" json:"sort_order"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // Subscription binds a host user to a pricing plan.

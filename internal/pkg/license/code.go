@@ -33,6 +33,7 @@ var (
 	ErrCodeExhausted    = errors.New("mã kích hoạt đã dùng hết lượt")
 	ErrCodeAlreadyUsed  = errors.New("bạn đã dùng mã này rồi")
 	ErrCodePlanInactive = errors.New("gói của mã này không còn được bán")
+	ErrCodeLowerTier    = errors.New("tài khoản đang dùng gói cao hơn còn hạn; hãy kích hoạt mã này khi gói hiện tại hết hạn hoặc trên tài khoản khác")
 )
 
 // NormalizeCode makes matching independent of how the buyer typed the code:
@@ -183,6 +184,14 @@ func RedeemCode(userID uint, rawCode, ip string) (*model.Subscription, Entitleme
 		var plan model.PricingPlan
 		if err := tx.Where("id = ? AND is_active = ?", code.PlanID, true).First(&plan).Error; err != nil {
 			return ErrCodePlanInactive
+		}
+
+		// Checked before the redemption row is written, so a refused code keeps
+		// its use and can still be redeemed later or on another account.
+		var current model.Subscription
+		if err := tx.Where("user_id = ?", userID).First(&current).Error; err == nil &&
+			replacesHigherLiveTerm(time.Now(), &current, code.PlanID) {
+			return ErrCodeLowerTier
 		}
 
 		redemption := model.LicenseRedemption{

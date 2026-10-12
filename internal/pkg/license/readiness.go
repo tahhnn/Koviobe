@@ -75,8 +75,10 @@ func CheckEnforcementReadiness() EnforcementReadiness {
 		return r
 	}
 
-	// 1. Is the free plan actually locked down? (the automated form of
-	// 01_lock_free_plan.sql having been run)
+	// 1. Is the free plan bounded? Free used to be fully locked (every limit 0);
+	// since the 2026-10 price list it is a real tier with small limits, so the
+	// check is now "no limit is unlimited" — an unlimited free tier would make
+	// every paid plan pointless. The JSON name is kept for the admin console.
 	var freeLimits struct {
 		MaxPlayersPerRoom   int
 		MaxQuizzes          int
@@ -91,11 +93,11 @@ func CheckEnforcementReadiness() EnforcementReadiness {
 	if err != nil {
 		log.Printf("[LICENSE] readiness: free plan read failed: %v", err)
 	} else {
-		r.FreePlanLocked = freeLimits.MaxPlayersPerRoom == 0 &&
-			freeLimits.MaxQuizzes == 0 &&
-			freeLimits.MaxTemplates == 0 &&
-			freeLimits.MaxConcurrentRooms == 0 &&
-			freeLimits.MaxQuestionsPerQuiz == 0
+		r.FreePlanLocked = !IsUnlimited(freeLimits.MaxPlayersPerRoom) &&
+			!IsUnlimited(freeLimits.MaxQuizzes) &&
+			!IsUnlimited(freeLimits.MaxTemplates) &&
+			!IsUnlimited(freeLimits.MaxConcurrentRooms) &&
+			!IsUnlimited(freeLimits.MaxQuestionsPerQuiz)
 	}
 
 	// 2. Admins without a usable paid plan — the lockout that costs the operator
