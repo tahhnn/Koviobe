@@ -14,6 +14,7 @@ import (
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/handler"
 	"github.com/quizzzone/backend/internal/middleware"
+	"github.com/quizzzone/backend/internal/pkg/email"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"github.com/quizzzone/backend/internal/pkg/notify"
 	"github.com/quizzzone/backend/internal/realtime"
@@ -50,6 +51,9 @@ func main() {
 	license.InitEnforcement()
 	cache.InitRedis()
 	realtime.InitCentrifugo()
+	// Before any request: mail queued in Redis by the previous process
+	// should go out now, not when the next signup happens to arrive.
+	email.StartWorkers()
 	cron.StartCleanupWorker()
 	cron.StartLicenseExpiryWorker()
 	cron.StartLicenseWarningWorker()
@@ -119,10 +123,15 @@ func main() {
 		auth.Use(middleware.AuthRateLimit())
 		{
 			auth.POST("/login", handler.Login)
-			auth.POST("/register", handler.Register)
+			// Both send mail to an address the caller types: human check
+			// first (a failed one costs no mail budget), then a per-IP
+			// hourly cap on top of the per-minute auth limiter.
+			auth.POST("/register", middleware.RequireCaptcha("register"), middleware.MailRequestRateLimit(), handler.Register)
 			auth.POST("/verify-otp", handler.VerifyOTP)
-			auth.POST("/forgot-password", handler.ForgotPassword)
+			auth.POST("/forgot-password", middleware.RequireCaptcha("forgot_password"), middleware.MailRequestRateLimit(), handler.ForgotPassword)
 			auth.POST("/reset-password", handler.ResetPassword)
+			auth.POST("/reset-password/check", handler.CheckResetToken)
+			auth.GET("/captcha", handler.CaptchaConfig)
 			auth.POST("/refresh", handler.RefreshToken)
 			auth.POST("/logout", handler.Logout)
 		}

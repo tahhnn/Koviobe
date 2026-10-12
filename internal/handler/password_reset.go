@@ -3,16 +3,20 @@ package handler
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
+	"html"
 	"log"
-	"math/big"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/quizzzone/backend/internal/cache"
+	"github.com/quizzzone/backend/internal/config"
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/audit"
@@ -23,37 +27,53 @@ import (
 )
 
 const (
-	resetCodeTTL     = 10 * time.Minute
-	resetCooldown    = 60 * time.Second
-	resetMaxAttempts = 5
-	// The attempt counter outlives any single code and is NOT cleared when a
-	// new code is requested. Clearing it (as Register does) would let an
-	// attacker guess 5 times, request a fresh code, and repeat — 5 guesses per
-	// cooldown window against a 6-digit space. Tied to the hour instead, the
-	// ceiling is 5 guesses per email per hour.
-	resetAttemptsTTL = time.Hour
+	resetTokenTTL = 30 * time.Minute
+	resetCooldown = 60 * time.Second
+	// 32 random bytes: guessing a live token is not a rate-limiting problem,
+	// so there is no attempt counter (the 6-digit code needed one).
+	resetTokenBytes = 32
 )
 
 // resetSentMessage is returned for every well-formed forgot-password request,
 // whether or not the account exists, so the endpoint cannot be used to find
 // out which emails are registered.
-const resetSentMessage = "If an account exists for this email, a password reset code has been sent."
+const resetSentMessage = "If an account exists for this email, a password reset link has been sent."
+
+const resetInvalidMessage = "This reset link is invalid or has expired"
 
 type ForgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
 type ResetPasswordRequest struct {
-	Email       string `json:"email" binding:"required,email"`
-	OTP         string `json:"otp" binding:"required"`
+	Token       string `json:"token" binding:"required,max=128"`
 	NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
 }
 
-func resetCodeKey(email string) string     { return "pwreset:" + email }
-func resetAttemptsKey(email string) string { return "pwreset_attempts:" + email }
+type CheckResetTokenRequest struct {
+	Token string `json:"token" binding:"required,max=128"`
+}
+
+// Only the SHA-256 of a token is used as a key, so listing the keys does not
+// hand out working links. (The queued mail holds the link until it is sent.)
+func resetTokenKey(hash string) string     { return "pwreset_tok:" + hash }
+func resetUserKey(userID uint) string      { return fmt.Sprintf("pwreset_user:%d", userID) }
 func resetCooldownKey(email string) string { return "pwreset_cooldown:" + email }
 
-// ForgotPassword emails a 6-digit reset code to an existing, active account.
+func hashResetToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// revokeResetToken kills the user's outstanding reset link, if any. Called on
+// a new request (only the latest link works) and on any password change.
+func revokeResetToken(ctx context.Context, userID uint) {
+	if old, err := cache.RDB.GetDel(ctx, resetUserKey(userID)).Result(); err == nil && old != "" {
+		cache.RDB.Del(ctx, resetTokenKey(old))
+	}
+}
+
+// ForgotPassword emails a one-time reset link to an existing, active account.
 func ForgotPassword(c *gin.Context) {
 	var req ForgotPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,99 +104,131 @@ func ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	n, err := rand.Int(rand.Reader, big.NewInt(900000))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate OTP"})
-		return
-	}
-	otp := fmt.Sprintf("%06d", n.Int64()+100000)
-
-	if err := cache.RDB.Set(ctx, resetCodeKey(req.Email), otp, resetCodeTTL).Err(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save verification code"})
+	appURL := config.AppConfig.PublicAppURL
+	if appURL == "" {
+		// Without it there is nowhere to point the link. Same answer to the
+		// caller as any other request; the operator gets told.
+		log.Printf("[ForgotPassword] PUBLIC_APP_URL is not set; reset link not sent")
+		notify.P1("reset_no_app_url", "PUBLIC_APP_URL chưa đặt — không gửi được link đặt lại mật khẩu.")
+		c.JSON(http.StatusOK, gin.H{"message": resetSentMessage})
 		return
 	}
 
+	raw := make([]byte, resetTokenBytes)
+	if _, err := rand.Read(raw); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	hash := hashResetToken(token)
+
+	revokeResetToken(ctx, user.ID)
+	pipe := cache.RDB.TxPipeline()
+	pipe.Set(ctx, resetTokenKey(hash), strconv.FormatUint(uint64(user.ID), 10), resetTokenTTL)
+	pipe.Set(ctx, resetUserKey(user.ID), hash, resetTokenTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+		return
+	}
+
+	// Fragment, not query string: browsers never send it to the server, so the
+	// token stays out of nginx access logs and Referer headers.
+	link := appURL + "/reset-password#token=" + token
 	htmlBody := fmt.Sprintf(`
 		<div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
-			<h2 style="color: #4f46e5; text-align: center;">quizzZone — Password Reset</h2>
-			<p>Hello,</p>
-			<p>We received a request to reset the password for your account. Enter this code to choose a new password:</p>
-			<div style="background: #f3f4f6; padding: 15px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #1f2937; margin: 20px 0;">
-				%s
-			</div>
-			<p style="font-size: 12px; color: #6b7280; margin-top: 20px; text-align: center;">
-				This code is valid for 10 minutes. If you did not request a password reset, ignore this email — your password stays unchanged.
+			<h2 style="color: #4f46e5; text-align: center;">quizzZone — Đặt lại mật khẩu</h2>
+			<p>Xin chào,</p>
+			<p>Chúng tôi nhận được yêu cầu đặt lại mật khẩu cho tài khoản quizzZone dùng email này. Bấm nút dưới đây để chọn mật khẩu mới:</p>
+			<p style="text-align: center; margin: 24px 0;">
+				<a href="%[1]s" style="background: #e85d4c; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Đặt lại mật khẩu</a>
+			</p>
+			<p style="font-size: 13px; color: #4b5563;">Nếu nút không bấm được, mở liên kết này:<br><a href="%[1]s" style="color: #4f46e5; word-break: break-all;">%[1]s</a></p>
+			<p style="font-size: 12px; color: #6b7280; margin-top: 20px;">
+				Liên kết dùng được một lần và hết hạn sau 30 phút. Nếu bạn không yêu cầu đặt lại mật khẩu, hãy bỏ qua email này — mật khẩu của bạn không thay đổi.
 			</p>
 		</div>
-	`, otp)
+	`, html.EscapeString(link))
 
 	// Queued and capped per recipient: the cooldown alone still let one
 	// address receive 60 reset mails an hour.
-	_ = email.Enqueue(req.Email, "Mã đặt lại mật khẩu quizzZone", htmlBody)
+	_ = email.Enqueue(req.Email, "Đặt lại mật khẩu quizzZone", htmlBody)
 
 	audit.Record(user.ID, "password_reset_request", fmt.Sprintf("user_%d", user.ID), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": resetSentMessage})
 }
 
-// ResetPassword checks the emailed code and sets the new password.
+// lookupResetToken returns the user a live token belongs to, without
+// consuming it.
+func lookupResetToken(ctx context.Context, token string) (uint, bool) {
+	s, err := cache.RDB.Get(ctx, resetTokenKey(hashResetToken(strings.TrimSpace(token)))).Result()
+	if err != nil {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return uint(id), true
+}
+
+// CheckResetToken lets the reset page say "this link has expired" before the
+// user types a new password. It does not consume the token: mail scanners
+// that prefetch links only load the page, and the page only calls this.
+func CheckResetToken(c *gin.Context) {
+	var req CheckResetTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resetInvalidMessage})
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, ok := lookupResetToken(ctx, req.Token); !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resetInvalidMessage})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"valid": true})
+}
+
+// ResetPassword consumes the token from the emailed link and sets the new
+// password.
 func ResetPassword(c *gin.Context) {
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	req.OTP = strings.TrimSpace(req.OTP)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	codeKey := resetCodeKey(req.Email)
-	attemptsKey := resetAttemptsKey(req.Email)
-
-	var attempts int
-	if s, err := cache.RDB.Get(ctx, attemptsKey).Result(); err == nil {
-		fmt.Sscanf(s, "%d", &attempts)
-	}
-	if attempts >= resetMaxAttempts {
-		cache.RDB.Del(ctx, codeKey)
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many failed attempts. Please try again in an hour."})
-		return
-	}
-
-	saved, err := cache.RDB.Get(ctx, codeKey).Result()
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Verification code has expired or is invalid"})
-		return
-	}
-
-	match := len(saved) == len(req.OTP) &&
-		subtle.ConstantTimeCompare([]byte(saved), []byte(req.OTP)) == 1
-	if !match {
-		cache.RDB.Incr(ctx, attemptsKey)
-		cache.RDB.Expire(ctx, attemptsKey, resetAttemptsTTL)
-		audit.Record(0, "password_reset_bad_code", req.Email, c.ClientIP())
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid verification code"})
-		return
-	}
-
-	var user model.User
-	if err := db.DB.Where("email = ?", req.Email).First(&user).Error; err != nil || !user.IsActive {
-		cache.RDB.Del(ctx, codeKey)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Verification code has expired or is invalid"})
-		return
-	}
-
+	// Hash first, before the token is consumed: bcrypt takes ~100ms and the
+	// token must not be burned by a request that then fails on it.
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash new password"})
 		return
 	}
 
-	// Single-use: delete before writing, so a replay racing this request finds
-	// no code. Del returning 0 means another request already consumed it.
-	if n, err := cache.RDB.Del(ctx, codeKey).Result(); err != nil || n == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Verification code has expired or is invalid"})
+	// GETDEL makes the token single-use even under concurrent submits: only
+	// one request gets the value back.
+	hash := hashResetToken(strings.TrimSpace(req.Token))
+	s, err := cache.RDB.GetDel(ctx, resetTokenKey(hash)).Result()
+	if err != nil {
+		audit.Record(0, "password_reset_bad_token", "", c.ClientIP())
+		c.JSON(http.StatusBadRequest, gin.H{"error": resetInvalidMessage})
+		return
+	}
+	id, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resetInvalidMessage})
+		return
+	}
+	userID := uint(id)
+	cache.RDB.Del(ctx, resetUserKey(userID))
+
+	var user model.User
+	if err := db.DB.First(&user, userID).Error; err != nil || !user.IsActive {
+		c.JSON(http.StatusBadRequest, gin.H{"error": resetInvalidMessage})
 		return
 	}
 
@@ -184,7 +236,6 @@ func ResetPassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 		return
 	}
-	cache.RDB.Del(ctx, attemptsKey)
 
 	// Same reasoning as ChangePassword: a reset is often triggered because
 	// someone else may hold a session, so old refresh tokens must die.

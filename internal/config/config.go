@@ -50,6 +50,12 @@ type Config struct {
 	EmailPerRecipientHour int
 	EmailPerRecipientDay  int
 	EmailQueueSize        int
+	// Mail-triggering requests (signup, password reset) one IP may make per
+	// hour, on top of the general auth limiter.
+	MailRequestsPerIPHour int
+	// Cloudflare Turnstile. Empty secret = captcha check skipped.
+	TurnstileSiteKey   string
+	TurnstileSecretKey string
 	// LicenseEnforcement gates the Free/Pro limits in internal/pkg/license. It is
 	// config, not a build-time constant, so enabling or disabling commercial gates
 	// is a restart — not a rebuild and redeploy of the image.
@@ -196,6 +202,9 @@ func LoadConfig() {
 		EmailPerRecipientHour: getEnvInt("EMAIL_PER_RECIPIENT_HOUR", 5),
 		EmailPerRecipientDay:  getEnvInt("EMAIL_PER_RECIPIENT_DAY", 15),
 		EmailQueueSize:        getEnvInt("EMAIL_QUEUE_SIZE", 500),
+		MailRequestsPerIPHour: getEnvInt("MAIL_REQUESTS_PER_IP_HOUR", 10),
+		TurnstileSiteKey:      strings.TrimSpace(getEnv("TURNSTILE_SITE_KEY", "")),
+		TurnstileSecretKey:    strings.TrimSpace(getEnv("TURNSTILE_SECRET_KEY", "")),
 		LicenseEnforcement:    getEnvBool("LICENSE_ENFORCEMENT", false),
 
 		AuditRetentionDays:       getEnvInt("AUDIT_RETENTION_DAYS", 365),
