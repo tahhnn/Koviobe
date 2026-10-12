@@ -38,6 +38,18 @@ type Config struct {
 	// "implicit" (SMTPS, TLS before the greeting), "starttls", or empty to pick
 	// by port: 465 is implicit, everything else STARTTLS.
 	SMTPTLS string
+	// Display name and optional Reply-To on outgoing mail. The From address is
+	// always SMTPEmail: sending as any other address fails SPF/DMARC alignment.
+	SMTPFromName string
+	SMTPReplyTo  string
+	// Outgoing-mail abuse limits (internal/pkg/email). Every address a user can
+	// type — signup, password reset, quiz invites — ends up in our SMTP queue,
+	// so these bound what one victim can receive and what one burst can cost
+	// the domain's sending reputation.
+	EmailMaxPerMinute     int // whole process, across all recipients
+	EmailPerRecipientHour int
+	EmailPerRecipientDay  int
+	EmailQueueSize        int
 	// LicenseEnforcement gates the Free/Pro limits in internal/pkg/license. It is
 	// config, not a build-time constant, so enabling or disabling commercial gates
 	// is a restart — not a rebuild and redeploy of the image.
@@ -162,23 +174,29 @@ func LoadConfig() {
 		// Pool sizing: MaxOpenConns must stay well under Postgres max_connections
 		// divided by the number of API replicas. MaxIdleConns matches it so the
 		// pool does not close and redial connections between bursts.
-		DBMaxOpenConns:       getEnvInt("DB_MAX_OPEN_CONNS", 25),
-		DBMaxIdleConns:       getEnvInt("DB_MAX_IDLE_CONNS", 25),
-		DBConnMaxLifetimeMin: getEnvInt("DB_CONN_MAX_LIFETIME_MIN", 30),
-		DBConnMaxIdleMin:     getEnvInt("DB_CONN_MAX_IDLE_MIN", 5),
-		DBConnectTimeoutSec:  getEnvInt("DB_CONNECT_TIMEOUT_SEC", 5),
-		DBStatementTimeoutMs: getEnvInt("DB_STATEMENT_TIMEOUT_MS", 15000),
-		RedisAddr:            getEnv("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:        getEnv("REDIS_PASSWORD", ""),
-		CentrifugoAPIURL:     getEnv("CENTRIFUGO_API_URL", "http://localhost:8000/api"),
-		CentrifugoSecret:     requireEnv("CENTRIFUGO_SECRET"),
-		CentrifugoAPIKey:     requireEnv("CENTRIFUGO_API_KEY"),
-		SMTPHost:             getEnv("SMTP_HOST", "smtp.gmail.com"),
-		SMTPPort:             getEnv("SMTP_PORT", "587"),
-		SMTPEmail:            getEnv("SMTP_EMAIL", ""),
-		SMTPPassword:         getEnv("SMTP_PASSWORD", ""),
-		SMTPTLS:              getEnv("SMTP_TLS", ""),
-		LicenseEnforcement:   getEnvBool("LICENSE_ENFORCEMENT", false),
+		DBMaxOpenConns:        getEnvInt("DB_MAX_OPEN_CONNS", 25),
+		DBMaxIdleConns:        getEnvInt("DB_MAX_IDLE_CONNS", 25),
+		DBConnMaxLifetimeMin:  getEnvInt("DB_CONN_MAX_LIFETIME_MIN", 30),
+		DBConnMaxIdleMin:      getEnvInt("DB_CONN_MAX_IDLE_MIN", 5),
+		DBConnectTimeoutSec:   getEnvInt("DB_CONNECT_TIMEOUT_SEC", 5),
+		DBStatementTimeoutMs:  getEnvInt("DB_STATEMENT_TIMEOUT_MS", 15000),
+		RedisAddr:             getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:         getEnv("REDIS_PASSWORD", ""),
+		CentrifugoAPIURL:      getEnv("CENTRIFUGO_API_URL", "http://localhost:8000/api"),
+		CentrifugoSecret:      requireEnv("CENTRIFUGO_SECRET"),
+		CentrifugoAPIKey:      requireEnv("CENTRIFUGO_API_KEY"),
+		SMTPHost:              getEnv("SMTP_HOST", "smtp.gmail.com"),
+		SMTPPort:              getEnv("SMTP_PORT", "587"),
+		SMTPEmail:             getEnv("SMTP_EMAIL", ""),
+		SMTPPassword:          getEnv("SMTP_PASSWORD", ""),
+		SMTPTLS:               getEnv("SMTP_TLS", ""),
+		SMTPFromName:          getEnv("SMTP_FROM_NAME", "quizzZone"),
+		SMTPReplyTo:           getEnv("SMTP_REPLY_TO", ""),
+		EmailMaxPerMinute:     getEnvInt("EMAIL_MAX_PER_MINUTE", 30),
+		EmailPerRecipientHour: getEnvInt("EMAIL_PER_RECIPIENT_HOUR", 5),
+		EmailPerRecipientDay:  getEnvInt("EMAIL_PER_RECIPIENT_DAY", 15),
+		EmailQueueSize:        getEnvInt("EMAIL_QUEUE_SIZE", 500),
+		LicenseEnforcement:    getEnvBool("LICENSE_ENFORCEMENT", false),
 
 		AuditRetentionDays:       getEnvInt("AUDIT_RETENTION_DAYS", 365),
 		JoinRateLimitPerMin:      getEnvInt("JOIN_RATE_LIMIT_PER_MIN", 2000),

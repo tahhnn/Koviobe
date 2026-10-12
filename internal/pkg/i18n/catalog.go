@@ -41,6 +41,7 @@ var vi = map[string]string{
 	"Too many failed verification attempts. Your verification code has been invalidated. Please register again.": "Nhập sai mã xác thực quá nhiều lần. Mã đã bị huỷ, vui lòng đăng ký lại.",
 	"Invalid verification code":                                               "Mã xác thực không đúng",
 	"Too many failed attempts. Please try again in an hour.":                  "Nhập sai quá nhiều lần. Vui lòng thử lại sau 1 giờ.",
+	"This email address cannot receive mail":                                  "Địa chỉ email này không nhận được thư — kiểm tra lại tên miền",
 	"Please wait a minute before requesting another code":                     "Vui lòng đợi 1 phút trước khi yêu cầu mã mới",
 	"Failed to process request":                                               "Không xử lý được yêu cầu",
 	"Authentication required: provide Authorization or X-Player-Token header": "Cần đăng nhập: thiếu header Authorization hoặc X-Player-Token",

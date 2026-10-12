@@ -98,7 +98,7 @@ func ForgotPassword(c *gin.Context) {
 
 	htmlBody := fmt.Sprintf(`
 		<div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
-			<h2 style="color: #4f46e5; text-align: center;">🔑 QUIZBATTLE Password Reset</h2>
+			<h2 style="color: #4f46e5; text-align: center;">quizzZone — Password Reset</h2>
 			<p>Hello,</p>
 			<p>We received a request to reset the password for your account. Enter this code to choose a new password:</p>
 			<div style="background: #f3f4f6; padding: 15px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #1f2937; margin: 20px 0;">
@@ -110,9 +110,9 @@ func ForgotPassword(c *gin.Context) {
 		</div>
 	`, otp)
 
-	go func() {
-		_ = email.SendEmail(req.Email, "🔑 QUIZBATTLE: Password Reset Code", htmlBody)
-	}()
+	// Queued and capped per recipient: the cooldown alone still let one
+	// address receive 60 reset mails an hour.
+	_ = email.Enqueue(req.Email, "Mã đặt lại mật khẩu quizzZone", htmlBody)
 
 	audit.Record(user.ID, "password_reset_request", fmt.Sprintf("user_%d", user.ID), c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"message": resetSentMessage})

@@ -251,6 +251,14 @@ func AddQuizCollaborator(c *gin.Context) {
 		return
 	}
 
+	// Only the domain can be checked; see email.CheckDomain. Done before the
+	// row exists, so a typo is fixed now rather than living on as a pending
+	// invite nobody can ever claim.
+	if err := email.CheckDomain(c.Request.Context(), addr); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	ents, err := license.GetEntitlements(uid)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"})
@@ -360,7 +368,7 @@ func AddQuizCollaborator(c *gin.Context) {
 	}
 
 	audit.Record(uid, "quiz_share_add", fmt.Sprintf("quiz_%d", quiz.ID), c.ClientIP())
-	go sendShareInvite(addr, owner.Nickname, quiz.ID, quiz.Title, inviteeID != nil)
+	sendShareInvite(addr, owner.Nickname, quiz.ID, quiz.Title, inviteeID != nil)
 
 	c.JSON(http.StatusCreated, toCollaboratorItem(row))
 }
@@ -430,12 +438,13 @@ func claimPendingInvites(userID uint, addr string) {
 	}
 }
 
-// sendShareInvite tells the invited address it was given access. Best effort:
-// the grant already exists, so a failed send is logged, not surfaced.
+// sendShareInvite queues the mail telling the invited address it was given
+// access. Best effort: the grant already exists, and is claimed on sign-in
+// whether or not the mail arrives, so a dropped send is logged, not surfaced.
 func sendShareInvite(to, ownerNickname string, quizID uint, quizTitle string, hasAccount bool) {
-	if err := email.SendEmail(to, "Bạn được mời cùng sửa một quiz trên quizzZone",
+	if err := email.Enqueue(to, "Bạn được mời cùng sửa một quiz trên quizzZone",
 		shareInviteHTML(ownerNickname, quizID, quizTitle, hasAccount)); err != nil {
-		log.Printf("[SHARE] invite email to quiz %d failed: %v", quizID, err)
+		log.Printf("[SHARE] invite email to quiz %d not queued: %v", quizID, err)
 	}
 }
 

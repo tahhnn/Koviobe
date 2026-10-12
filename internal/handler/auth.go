@@ -32,6 +32,9 @@ type LoginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+// registerCooldown is the minimum gap between two signup codes to one address.
+const registerCooldown = 60 * time.Second
+
 type RegisterRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Nickname string `json:"nickname" binding:"required,min=1,max=100"`
@@ -136,13 +139,35 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	req.Email = strings.ToLower(req.Email)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 
 	// Check if user already exists
 	var count int64
 	db.DB.Model(&model.User{}).Where("email = ?", req.Email).Count(&count)
 	if count > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Email is already registered"})
+		return
+	}
+
+	// A made-up or mistyped domain gets an answer now instead of a code that
+	// never arrives — and costs us no send.
+	if err := email.CheckDomain(c.Request.Context(), req.Email); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// One code per address per minute. Without it this endpoint mailed any
+	// address as fast as the per-IP limiter allowed, from as many IPs as an
+	// attacker had: an inbox-bombing tool with our domain's name on it.
+	cooldownCtx, cooldownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cooldownCancel()
+	fresh, err := cache.RDB.SetNX(cooldownCtx, "otp_cooldown:"+req.Email, "1", registerCooldown).Result()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+		return
+	}
+	if !fresh {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Please wait a minute before requesting another code"})
 		return
 	}
 
@@ -186,7 +211,7 @@ func Register(c *gin.Context) {
 	// Send OTP email
 	htmlBody := fmt.Sprintf(`
 		<div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px; max-width: 500px;">
-			<h2 style="color: #4f46e5; text-align: center;">⚔️ QUIZBATTLE Verification</h2>
+			<h2 style="color: #4f46e5; text-align: center;">quizzZone — Verification</h2>
 			<p>Hello,</p>
 			<p>Thank you for registering. Here is your verification code to complete the process:</p>
 			<div style="background: #f3f4f6; padding: 15px; border-radius: 8px; text-align: center; font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #1f2937; margin: 20px 0;">
@@ -198,10 +223,9 @@ func Register(c *gin.Context) {
 		</div>
 	`, otp)
 
-	// We call email.SendEmail and log the output. We don't block registration on email failure to prevent API issues during temporary SMTP outages.
-	go func() {
-		_ = email.SendEmail(req.Email, "⚔️ QUIZBATTLE: Verify Your Account", htmlBody)
-	}()
+	// Queued, paced and capped per recipient — see email.Enqueue. A dropped
+	// send is not surfaced: the cooldown already answered the abusive case.
+	_ = email.Enqueue(req.Email, "Mã xác thực quizzZone", htmlBody)
 
 	// No account exists yet, so the row belongs to user 0 and names the email.
 	audit.Log(c, 0, "register_request_otp", req.Email, map[string]any{"email": req.Email})
@@ -331,9 +355,7 @@ func VerifyOTP(c *gin.Context) {
 		</div>
 	`, generatedPassword)
 
-	go func() {
-		_ = email.SendEmail(req.Email, "🎉 QUIZBATTLE: Your Temporary Password", pwdBody)
-	}()
+	_ = email.EnqueueUncapped(req.Email, "Mật khẩu tạm thời quizzZone", pwdBody)
 
 	// Preload role permissions for JWT generation
 	if err := db.DB.Preload("Role.Permissions").First(&newUser, newUser.ID).Error; err != nil {
