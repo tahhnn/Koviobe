@@ -366,13 +366,22 @@ func AdminReconcilePayments(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "days must be between 1 and 30"})
 		return
 	}
-	if !payment.ReconcileConfigured() {
+	gateway := payment.GatewayReconcileConfigured()
+	if !gateway && !payment.ReconcileConfigured() {
 		c.JSON(http.StatusConflict, gin.H{"error": payment.ErrReconcileNotConfigured.Error()})
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Minute)
 	defer cancel()
-	res, err := payment.Reconcile(ctx, time.Now().AddDate(0, 0, -req.Days), payment.AfterApplied)
+	var (
+		res payment.ReconcileResult
+		err error
+	)
+	if gateway {
+		res, err = payment.ReconcileGateway(ctx, time.Duration(req.Days)*24*time.Hour, payment.AfterApplied)
+	} else {
+		res, err = payment.Reconcile(ctx, time.Now().AddDate(0, 0, -req.Days), payment.AfterApplied)
+	}
 	if err != nil {
 		log.Printf("[payment] manual reconcile failed: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "SePay reconciliation failed", "result": res})
