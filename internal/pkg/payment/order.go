@@ -20,7 +20,8 @@ import (
 
 // OrderTTL is how long a QR stays payable. Short on purpose: a code that lives
 // for days is a code a buyer pays twice, after forgetting the first transfer.
-// Money that arrives after expiry is still kept — it goes to review.
+// Money that arrives after expiry is still kept: the exact amount settles the
+// expired order (see settle), anything else goes to review.
 const OrderTTL = 30 * time.Minute
 
 var (
@@ -32,12 +33,16 @@ var (
 	ErrOrderAlreadyPaid   = errors.New("Order is already paid")
 	ErrOrderNotCancelable = errors.New("Order cannot be cancelled")
 	ErrConfirmFields      = errors.New("amount_vnd, external_ref and note are required to confirm an order")
+	ErrTooManyOrders      = errors.New("Too many checkout attempts. Please finish or wait before starting another.")
 )
 
 // CheckoutConfigured reports whether the server holds everything a QR needs.
 // Checked before checkout can be switched on, so the switch cannot open a
 // checkout that shows a QR for an empty account.
 func CheckoutConfigured() bool {
+	if UsesGateway() {
+		return gatewayConfigured()
+	}
 	c := config.AppConfig
 	return c != nil && c.PaymentBankName != "" && c.PaymentBankAccount != "" &&
 		c.PaymentQRImageBase != "" && c.SePayAPIKey != ""
@@ -50,8 +55,16 @@ func CheckoutEnabled() bool {
 	return err == nil && on && CheckoutConfigured()
 }
 
-// CreateOrder opens a checkout for productID. Any pending order the user
-// already has is cancelled in the same transaction: one live QR per buyer.
+// CreateOrder opens a checkout for productID, keeping one live QR per buyer.
+//
+// What happens to the buyer's existing pending order, in the same transaction:
+//   - still within its TTL, same product and price → returned as is. Reopening
+//     the checkout page must not cancel a QR the buyer may already have paid
+//     while the webhook is still on its way; a cancelled order sends that
+//     money to review instead of settling it.
+//   - past its TTL (the sweep runs every few minutes) → expired, not
+//     cancelled, so a late transfer still settles automatically.
+//   - still live but for another product or price → cancelled (superseded).
 func CreateOrder(userID uint, productID string) (*model.PaymentOrder, error) {
 	if !CheckoutEnabled() {
 		return nil, ErrCheckoutClosed
@@ -82,10 +95,45 @@ func createOrderOnce(userID uint, productID string) (*model.PaymentOrder, error)
 			return ErrProductUnavailable
 		}
 
-		if err := tx.Model(&model.PaymentOrder{}).
+		var open []model.PaymentOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ? AND status = ?", userID, model.OrderPending).
-			Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
+			Find(&open).Error; err != nil {
 			return err
+		}
+		now := time.Now()
+		for _, o := range open {
+			switch {
+			case now.After(o.ExpiresAt):
+				if err := tx.Model(&model.PaymentOrder{}).Where("id = ?", o.ID).
+					Update("status", model.OrderExpired).Error; err != nil {
+					return err
+				}
+			case o.ProductID == p.ID && o.AmountVND == p.AmountVND:
+				order = o
+				return nil
+			default:
+				if err := tx.Model(&model.PaymentOrder{}).Where("id = ?", o.ID).
+					Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// Past here a new row is minted, so the churn cap applies — the resume
+		// branch above returned already and never counts against it. Counted in
+		// the same transaction and under the pending-row lock, so parallel
+		// creates cannot slip past the cap together.
+		if cap := orderChurnCap(); cap > 0 {
+			var recent int64
+			if err := tx.Model(&model.PaymentOrder{}).
+				Where("user_id = ? AND created_at > ?", userID, now.Add(-time.Hour)).
+				Count(&recent).Error; err != nil {
+				return err
+			}
+			if recent >= int64(cap) {
+				return ErrTooManyOrders
+			}
 		}
 
 		order = model.PaymentOrder{
@@ -302,7 +350,8 @@ func AdminCancel(code, note string, actorID uint) (*model.PaymentOrder, error) {
 }
 
 // ExpireStale closes pending orders past their TTL. A transfer that still
-// arrives for one is not lost: it is matched by code and sent to review.
+// arrives for one is not lost: it is matched by code, and settles the order
+// when the amount is exact (review otherwise).
 func ExpireStale() (int64, error) {
 	res := db.DB.Model(&model.PaymentOrder{}).
 		Where("status = ? AND expires_at < ?", model.OrderPending, time.Now()).
@@ -360,19 +409,25 @@ func ListAdminOrders(f AdminOrderFilter) ([]AdminOrderRow, error) {
 	return rows, err
 }
 
-// CheckoutInfo is what the buyer needs to pay an order.
+// CheckoutInfo is what the buyer needs to pay an order: either the bank
+// transfer details (direct transfer), or the signed form for SePay's hosted
+// payment page (Gateway, when PAYMENT_PROVIDER=sepay_pg).
 type CheckoutInfo struct {
-	BankName        string `json:"bank_name"`
-	BankAccount     string `json:"bank_account"`
-	BankHolder      string `json:"bank_holder,omitempty"`
-	TransferContent string `json:"transfer_content"`
-	QRURL           string `json:"qr_url"`
+	BankName        string       `json:"bank_name,omitempty"`
+	BankAccount     string       `json:"bank_account,omitempty"`
+	BankHolder      string       `json:"bank_holder,omitempty"`
+	TransferContent string       `json:"transfer_content,omitempty"`
+	QRURL           string       `json:"qr_url,omitempty"`
+	Gateway         *GatewayForm `json:"gateway,omitempty"`
 }
 
-// CheckoutFor builds the transfer details for an order from server config.
+// CheckoutFor builds the payment details for an order from server config.
 // The QR encodes the exact amount and the order code as content, so a buyer who
 // scans it cannot get either wrong.
 func CheckoutFor(o *model.PaymentOrder) CheckoutInfo {
+	if UsesGateway() {
+		return CheckoutInfo{Gateway: GatewayFormFor(o)}
+	}
 	c := config.AppConfig
 	if c == nil {
 		return CheckoutInfo{TransferContent: o.OrderCode}

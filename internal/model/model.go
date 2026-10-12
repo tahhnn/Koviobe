@@ -52,24 +52,47 @@ type Quiz struct {
 	Title       string `gorm:"size:255;not null" json:"title"`
 	Description string `gorm:"type:text" json:"description"`
 	ThemeConfig string `gorm:"type:text" json:"theme_config"` // JSON string containing custom theme colors/bg for this quiz
-	// Sharing. IsPublic lists the quiz for every host and lets them open a room
-	// from it or take their own copy; AllowEdit additionally opens the original
-	// to everyone's edits. Deleting, and changing these two flags, are never
-	// shared — both stay with HostID.
+	// Retired sharing flags. Access to someone else's quiz now comes only from a
+	// QuizCollaborator row; nothing reads these any more. The columns stay for
+	// one release so a rollback finds them, then get dropped.
 	//
-	// `default:false` is load-bearing in both directions. Without it AutoMigrate
-	// emits ADD COLUMN ... NOT NULL with no default, which Postgres rejects on a
-	// populated table ("contains null values") and the container exits on the
-	// migration. With it, the DB default matches Go's zero value, so GORM
-	// skipping a false field on INSERT still stores false — the pricing_plans
-	// trap only bites when the two disagree, as `default:true` would.
-	IsPublic  bool           `gorm:"index;not null;default:false" json:"is_public"`
-	AllowEdit bool           `gorm:"not null;default:false" json:"allow_edit"`
+	// `default:false` is load-bearing: without it AutoMigrate emits ADD COLUMN
+	// ... NOT NULL with no default, which Postgres rejects on a populated table.
+	IsPublic  bool           `gorm:"index;not null;default:false" json:"-"`
+	AllowEdit bool           `gorm:"not null;default:false" json:"-"`
 	Questions []Question     `gorm:"foreignKey:QuizID;constraint:OnDelete:CASCADE" json:"questions,omitempty"`
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
+
+// QuizCollaborator lets one email address edit one quiz that belongs to
+// someone else. It is the only way a quiz is reachable by anyone but its owner.
+//
+// Keyed on email, not user id, so an owner can invite someone who has no
+// account yet: UserID stays nil until that address registers or signs in
+// (see handler.claimPendingInvites). Email is stored lower-cased.
+//
+// Hard-deleted on revoke — no DeletedAt — so the (quiz_id, email) unique index
+// never collides with a tombstone when the same address is invited again.
+type QuizCollaborator struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	QuizID    uint      `gorm:"not null;uniqueIndex:idx_quiz_collab_email,priority:1" json:"quiz_id"`
+	Email     string    `gorm:"size:255;not null;uniqueIndex:idx_quiz_collab_email,priority:2" json:"email"`
+	UserID    *uint     `gorm:"index" json:"user_id,omitempty"`
+	Role      string    `gorm:"size:20;not null" json:"role"` // "editor"
+	InvitedBy uint      `gorm:"not null" json:"invited_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// CollaboratorRoleEditor may read and change a quiz's questions — nothing else.
+const CollaboratorRoleEditor = "editor"
+
+// DefaultProCollaboratorsPerQuiz is the editor cap the Pro plan is seeded and
+// backfilled with, and the cap while license enforcement is off. Lives here
+// rather than in license because the db seeding cannot import license.
+const DefaultProCollaboratorsPerQuiz = 5
 
 // Question represents an individual query within a Quiz.
 type Question struct {
@@ -106,13 +129,13 @@ type Template struct {
 
 // Room represents a live game instance.
 type Room struct {
-	ID                   uint           `gorm:"primaryKey" json:"id"`
-	PinCode              string         `gorm:"size:10;uniqueIndex;not null" json:"pin_code"`
-	QuizID               uint           `gorm:"not null" json:"quiz_id"`
+	ID      uint   `gorm:"primaryKey" json:"id"`
+	PinCode string `gorm:"size:10;uniqueIndex;not null" json:"pin_code"`
+	QuizID  uint   `gorm:"not null" json:"quiz_id"`
 	// idx_rooms_host_status serves "this host's open rooms" (CreateRoom's
 	// concurrency cap, license usage and expiry, the logs list, admin stats).
-	HostID               uint           `gorm:"not null;index:idx_rooms_host_status,priority:1" json:"host_id"`
-	Status               string         `gorm:"size:50;default:'waiting';index:idx_rooms_host_status,priority:2" json:"status"` // waiting, active, finished
+	HostID uint   `gorm:"not null;index:idx_rooms_host_status,priority:1" json:"host_id"`
+	Status string `gorm:"size:50;default:'waiting';index:idx_rooms_host_status,priority:2" json:"status"` // waiting, active, finished
 	// EndedReason is why the room closed: "" (the host ended it, or solo mode
 	// finished), license_expired, license_revoked. No `default:` tag — "" is the
 	// meaningful normal case, and GORM omits zero values on columns that have one.
@@ -168,18 +191,18 @@ type AnswerLog struct {
 // GameSession records the final result of a completed game room.
 // [C-4 FIX] Replaces the misuse of AnswerLog for game-end archiving.
 type GameSession struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	RoomID      uint      `gorm:"uniqueIndex;not null" json:"room_id"` // One session per room
-	HostID      uint      `gorm:"index;not null" json:"host_id"`
-	QuizID      uint      `gorm:"index;not null" json:"quiz_id"`
-	Rankings    string    `gorm:"type:text;not null" json:"rankings"` // JSON array of {nickname, score}
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	RoomID   uint   `gorm:"uniqueIndex;not null" json:"room_id"` // One session per room
+	HostID   uint   `gorm:"index;not null" json:"host_id"`
+	QuizID   uint   `gorm:"index;not null" json:"quiz_id"`
+	Rankings string `gorm:"type:text;not null" json:"rankings"` // JSON array of {nickname, score}
 	// QuestionStats is how the room did on each question (JSON array, see
 	// handler/question_stats.go). Captured at finalize because answer_logs are
 	// deleted right after. '' on rooms archived before the column existed.
-	QuestionStats string `gorm:"type:text;not null;default:''" json:"question_stats"`
-	PlayerCount int       `gorm:"default:0" json:"player_count"`
-	EndedAt     time.Time `json:"ended_at"`
-	CreatedAt   time.Time `json:"created_at"`
+	QuestionStats string    `gorm:"type:text;not null;default:''" json:"question_stats"`
+	PlayerCount   int       `gorm:"default:0" json:"player_count"`
+	EndedAt       time.Time `json:"ended_at"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // AuditLog records Host/Admin actions for security monitoring.

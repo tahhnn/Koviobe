@@ -3,6 +3,7 @@ package handler
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -67,6 +68,63 @@ func SePayWebhook(c *gin.Context) {
 	}
 
 	log.Printf("[sepay] %s", payment.Describe(t, out))
+	payment.AfterApplied(t, out)
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// gatewayAuthorized checks the IPN's "X-Secret-Key: <SEPAY_PG_SECRET_KEY>" in
+// constant time (merchant IPN auth type SECRET_KEY). No secret configured
+// means no IPN: an empty secret must never match.
+func gatewayAuthorized(c *gin.Context) bool {
+	key := ""
+	if config.AppConfig != nil {
+		key = config.AppConfig.SePayPGSecretKey
+	}
+	if key == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.GetHeader("X-Secret-Key")), []byte(key)) == 1
+}
+
+// SePayGatewayIPN receives one SePay Payment Gateway notification.
+//
+// Same response contract as the bank webhook: SePay wants HTTP 200 to stop
+// retrying, so every business outcome answers 200 and only a failure to
+// record the notification answers 5xx.
+func SePayGatewayIPN(c *gin.Context) {
+	if !gatewayAuthorized(c) {
+		notify.P1("sepay-pg-ipn-auth", "SePay gateway IPN rejected: bad X-Secret-Key from %s", c.ClientIP())
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false})
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, 64<<10))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false})
+		return
+	}
+	var n payment.GatewayIPN
+	if err := json.Unmarshal(raw, &n); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false})
+		return
+	}
+
+	t, out, err := payment.ApplyGatewayIPN(n, raw)
+	if errors.Is(err, payment.ErrIPNInvalid) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false})
+		return
+	}
+	if err != nil {
+		log.Printf("[sepay-pg] apply %s %s failed: %v", n.NotificationType, n.Order.OrderInvoiceNumber, err)
+		notify.P0("sepay-pg-ipn-apply", "SePay gateway IPN for %s could not be recorded: %v", n.Order.OrderInvoiceNumber, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false})
+		return
+	}
+	if out.Duplicate {
+		c.JSON(http.StatusOK, gin.H{"success": true})
+		return
+	}
+
+	log.Printf("[sepay-pg] %s", payment.Describe(t, out))
 	payment.AfterApplied(t, out)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }

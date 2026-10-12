@@ -54,6 +54,14 @@ type Config struct {
 	// MaxPlayersPerRoomOpen is the room cap reported (and, once
 	// LICENSE_ENFORCEMENT is on, enforced) while license enforcement is off.
 	MaxPlayersPerRoomOpen int
+
+	// Payment abuse controls. A buyer who churns checkouts (create, cancel,
+	// create again) spends SePay order ids and clutters the ledger; past the
+	// cap CreateOrder refuses rather than mint another link. The cancel burst
+	// is only a signal — it never blocks a cancel, it raises a Telegram alert.
+	PaymentMaxOrdersPerHour     int
+	PaymentCancelAlertThreshold int
+	PaymentCancelAlertWindowMin int
 	// AuditRetentionDays: audit rows older than this are deleted daily, except
 	// admin_* and license_* which are kept (decision 2026-10-05: 365 days).
 	AuditRetentionDays int
@@ -105,6 +113,23 @@ type Config struct {
 	// Different from SePayAPIKey, which SePay sends to us. Empty disables it.
 	SePayAPIToken string
 	SePayAPIBase  string
+
+	// PaymentProvider picks how checkout collects money:
+	//   ""         → direct bank transfer: our own VietQR + SePay bank webhook
+	//                (PAYMENT_BANK_*, SEPAY_API_KEY above).
+	//   "sepay_pg" → SePay Payment Gateway: the buyer pays on SePay's hosted
+	//                page, SePay confirms with an IPN (SEPAY_PG_* below).
+	PaymentProvider string
+	// SePayPGEnv is "sandbox" or "production"; it picks both the checkout and
+	// the API host, so sandbox keys can never be sent to production or back.
+	SePayPGEnv        string
+	SePayPGMerchantID string
+	// SePayPGSecretKey signs the checkout form and is what SePay sends back in
+	// the IPN's X-Secret-Key header.
+	SePayPGSecretKey string
+	// PublicAppURL is where SePay sends the buyer back (success/error/cancel),
+	// e.g. https://quizzzone.com. Never derived from the request Host.
+	PublicAppURL string
 }
 
 var AppConfig *Config
@@ -160,6 +185,10 @@ func LoadConfig() {
 		PinLookupRateLimitPerMin: getEnvInt("PIN_LOOKUP_RATE_LIMIT_PER_MIN", 2000),
 		MaxPlayersPerRoomOpen:    getEnvInt("MAX_PLAYERS_PER_ROOM_OPEN", 2000),
 
+		PaymentMaxOrdersPerHour:     getEnvInt("PAYMENT_MAX_ORDERS_PER_HOUR", 10),
+		PaymentCancelAlertThreshold: getEnvInt("PAYMENT_CANCEL_ALERT_THRESHOLD", 5),
+		PaymentCancelAlertWindowMin: getEnvInt("PAYMENT_CANCEL_ALERT_WINDOW_MIN", 10),
+
 		TelegramBotToken:     getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID:       getEnv("TELEGRAM_CHAT_ID", ""),
 		TelegramThreadID:     getEnv("TELEGRAM_THREAD_ID", ""),
@@ -177,6 +206,20 @@ func LoadConfig() {
 		SePayIPAllowlist:   splitList(getEnv("SEPAY_IP_ALLOWLIST", "")),
 		SePayAPIToken:      strings.TrimSpace(getEnv("SEPAY_API_TOKEN", "")),
 		SePayAPIBase:       httpsURLOrEmpty("SEPAY_API_BASE", getEnv("SEPAY_API_BASE", "https://my.sepay.vn/userapi")),
+
+		PaymentProvider:   strings.ToLower(strings.TrimSpace(getEnv("PAYMENT_PROVIDER", ""))),
+		SePayPGEnv:        strings.ToLower(strings.TrimSpace(getEnv("SEPAY_PG_ENV", "sandbox"))),
+		SePayPGMerchantID: strings.TrimSpace(getEnv("SEPAY_PG_MERCHANT_ID", "")),
+		SePayPGSecretKey:  strings.TrimSpace(getEnv("SEPAY_PG_SECRET_KEY", "")),
+		PublicAppURL:      strings.TrimRight(httpsURLOrEmpty("PUBLIC_APP_URL", getEnv("PUBLIC_APP_URL", "")), "/"),
+	}
+	switch AppConfig.PaymentProvider {
+	case "", "sepay_pg":
+	default:
+		log.Fatalf("FATAL: PAYMENT_PROVIDER must be empty or \"sepay_pg\", got %q", AppConfig.PaymentProvider)
+	}
+	if AppConfig.SePayPGEnv != "sandbox" && AppConfig.SePayPGEnv != "production" {
+		log.Fatalf("FATAL: SEPAY_PG_ENV must be \"sandbox\" or \"production\", got %q", AppConfig.SePayPGEnv)
 	}
 
 	validateSecurityConfig(AppConfig)
@@ -225,6 +268,10 @@ func validateSecurityConfig(cfg *Config) {
 	// and "mark this order paid".
 	if cfg.SePayAPIKey != "" {
 		validateSecret("SEPAY_API_KEY", cfg.SePayAPIKey, 24)
+	}
+	// Same reasoning: the gateway secret is what the IPN presents as proof.
+	if cfg.SePayPGSecretKey != "" {
+		validateSecret("SEPAY_PG_SECRET_KEY", cfg.SePayPGSecretKey, 24)
 	}
 
 	if (cfg.SMTPEmail == "") != (cfg.SMTPPassword == "") {

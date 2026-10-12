@@ -132,6 +132,9 @@ func main() {
 		// SePay bank-transfer webhook. No user auth: SePay authenticates with
 		// "Authorization: Apikey <SEPAY_API_KEY>", checked in the handler.
 		api.POST("/payments/webhook/sepay", middleware.SePayWebhookGuard(), handler.SePayWebhook)
+		// SePay Payment Gateway IPN. Authenticated by X-Secret-Key; same IP
+		// allowlist and rate limit as the bank webhook (both come from SePay).
+		api.POST("/payments/ipn/sepay-pg", middleware.SePayWebhookGuard(), handler.SePayGatewayIPN)
 
 		// Realtime tokens — require host JWT or player JWT (no open public minting)
 		api.GET("/realtime/token", handler.GetRealtimeToken)
@@ -233,14 +236,17 @@ func main() {
 			{
 				quizzes.POST("", middleware.RequirePermission("quiz:create"), handler.CreateQuiz)
 				quizzes.GET("", middleware.RequirePermission("quiz:read"), handler.ListQuizzes)
-				// Registered before /:id so "shared" is not captured as an id.
-				quizzes.GET("/shared", middleware.RequirePermission("quiz:read"), handler.ListSharedQuizzes)
+				// Registered before /:id so "shared-with-me" is not captured as an id.
+				quizzes.GET("/shared-with-me", middleware.RequirePermission("quiz:read"), handler.ListSharedWithMe)
 				quizzes.GET("/:id", middleware.RequirePermission("quiz:read"), handler.GetQuiz)
 				quizzes.PUT("/:id", middleware.RequirePermission("quiz:update"), handler.UpdateQuiz)
-				// Publishing is the owner's decision, so this deliberately sits
-				// behind quiz:update but checks host_id itself — edit rights on a
-				// shared quiz never reach it.
-				quizzes.PATCH("/:id/sharing", middleware.RequirePermission("quiz:update"), handler.UpdateQuizSharing)
+				// Who may edit is the owner's decision: these sit behind
+				// quiz:update but check host_id themselves, so an editor's rights
+				// never reach them. Only "me" — leaving — is open to the editor.
+				quizzes.GET("/:id/collaborators", middleware.RequirePermission("quiz:update"), handler.ListQuizCollaborators)
+				quizzes.POST("/:id/collaborators", middleware.RequirePermission("quiz:update"), handler.AddQuizCollaborator)
+				quizzes.DELETE("/:id/collaborators/me", middleware.RequirePermission("quiz:read"), handler.LeaveSharedQuiz)
+				quizzes.DELETE("/:id/collaborators/:cid", middleware.RequirePermission("quiz:update"), handler.RemoveQuizCollaborator)
 				quizzes.DELETE("/:id", middleware.RequirePermission("quiz:delete"), handler.DeleteQuiz)
 			}
 

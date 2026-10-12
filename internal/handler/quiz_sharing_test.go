@@ -15,135 +15,95 @@ import (
 const (
 	owner    = uint(1)
 	stranger = uint(2)
+	editor   = uint(3)
 )
 
-func quizOf(hostID uint, isPublic, allowEdit bool) model.Quiz {
-	return model.Quiz{ID: 7, HostID: hostID, IsPublic: isPublic, AllowEdit: allowEdit}
+func quizOf(hostID uint) model.Quiz {
+	return model.Quiz{ID: 7, HostID: hostID}
 }
 
-// The owner keeps every right no matter what the flags say — including on a
-// quiz they never published.
+func grantFor(quizID, uid uint) *model.QuizCollaborator {
+	id := uid
+	return &model.QuizCollaborator{QuizID: quizID, UserID: &id, Email: "e@x.vn", Role: model.CollaboratorRoleEditor}
+}
+
 func TestRightsOnOwnerAlwaysHasEveryRight(t *testing.T) {
-	for _, q := range []model.Quiz{
-		quizOf(owner, false, false),
-		quizOf(owner, true, false),
-		quizOf(owner, true, true),
-	} {
-		got := rightsOn(&q, owner)
-		want := quizRights{Owner: true, View: true, Host: true, Copy: true, Edit: true}
-		if got != want {
-			t.Fatalf("owner of quiz(public=%v, allowEdit=%v) got %+v, want %+v",
-				q.IsPublic, q.AllowEdit, got, want)
+	q := quizOf(owner)
+	want := quizRights{Owner: true, View: true, Host: true, Copy: true, Edit: true}
+	for _, canShare := range []bool{true, false} {
+		if got := rightsOn(&q, owner, nil, canShare); got != want {
+			t.Fatalf("owner (canShare=%v) got %+v, want %+v", canShare, got, want)
 		}
 	}
 }
 
-func TestRightsOnPrivateQuizGrantsNothingToOthers(t *testing.T) {
-	q := quizOf(owner, false, false)
-	if got := rightsOn(&q, stranger); got != (quizRights{}) {
-		t.Fatalf("a private quiz leaked rights to a stranger: %+v", got)
+// The leak this replaced: the retired is_public flag opened a quiz to every
+// account. Whatever the old columns hold, a stranger gets nothing.
+func TestRightsOnIgnoresTheRetiredPublicFlags(t *testing.T) {
+	q := model.Quiz{ID: 7, HostID: owner, IsPublic: true, AllowEdit: true}
+	if got := rightsOn(&q, stranger, nil, true); got != (quizRights{}) {
+		t.Fatalf("a public-flagged quiz leaked %+v to a stranger", got)
 	}
 }
 
-// Publishing alone gives reading, hosting and copying — editing is a separate
-// decision the owner has to make on purpose.
-func TestRightsOnPublicQuizGrantsViewHostAndCopyButNotEdit(t *testing.T) {
-	q := quizOf(owner, true, false)
-	got := rightsOn(&q, stranger)
-	want := quizRights{View: true, Host: true, Copy: true}
+func TestRightsOnEditorMayViewAndEditOnly(t *testing.T) {
+	q := quizOf(owner)
+	got := rightsOn(&q, editor, grantFor(q.ID, editor), true)
+	want := quizRights{View: true, Edit: true}
 	if got != want {
-		t.Fatalf("public quiz gave a stranger %+v, want %+v", got, want)
+		t.Fatalf("editor got %+v, want %+v", got, want)
 	}
 }
 
-func TestRightsOnAllowEditOpensTheOriginal(t *testing.T) {
-	q := quizOf(owner, true, true)
-	got := rightsOn(&q, stranger)
-	if !got.Edit {
-		t.Fatalf("allow_edit did not grant editing: %+v", got)
-	}
-	if !got.Copy {
-		t.Fatal("an editable shared quiz must still be copyable")
-	}
-}
-
-// allow_edit must never act on its own. A row unshared while the flag was set
-// is private again, and private means no rights at all.
-func TestRightsOnIgnoresAllowEditWithoutIsPublic(t *testing.T) {
-	q := quizOf(owner, false, true)
-	if got := rightsOn(&q, stranger); got != (quizRights{}) {
-		t.Fatalf("allow_edit granted %+v on a private quiz", got)
+// Not hosting (the room would be the editor's), not copying (a copy outlives
+// the grant), and never owner — owner is what gates delete and sharing.
+func TestRightsOnEditorCannotHostCopyOrOwn(t *testing.T) {
+	q := quizOf(owner)
+	got := rightsOn(&q, editor, grantFor(q.ID, editor), true)
+	if got.Host || got.Copy || got.Owner {
+		t.Fatalf("editor got owner-only rights: %+v", got)
 	}
 }
 
-// Copying is what a reader does instead of editing, so it has to be granted
-// wherever viewing is — otherwise the read-only screen has no way out.
-func TestRightsOnGrantsCopyWhereverItGrantsView(t *testing.T) {
-	for _, q := range []model.Quiz{
-		quizOf(owner, true, false),
-		quizOf(owner, true, true),
-		quizOf(owner, false, false),
-	} {
-		got := rightsOn(&q, stranger)
-		if got.View != got.Copy {
-			t.Fatalf("quiz(public=%v) gave view=%v but copy=%v",
-				q.IsPublic, got.View, got.Copy)
+func TestRightsOnRejectsAGrantThatIsNotTheCallers(t *testing.T) {
+	q := quizOf(owner)
+	cases := map[string]*model.QuizCollaborator{
+		"another user's grant": grantFor(q.ID, stranger),
+		"another quiz's grant": grantFor(q.ID+1, editor),
+		"pending invite":       {QuizID: q.ID, Email: "e@x.vn", Role: model.CollaboratorRoleEditor},
+		"unknown role":         {QuizID: q.ID, UserID: grantFor(0, editor).UserID, Role: "admin"},
+		"no grant":             nil,
+	}
+	for name, g := range cases {
+		if got := rightsOn(&q, editor, g, true); got != (quizRights{}) {
+			t.Fatalf("%s granted %+v", name, got)
 		}
 	}
 }
 
-// Deleting, and changing the sharing flags, are both gated on Owner — so no
-// combination of flags may ever set it.
-func TestRightsOnNeverMakesAStrangerTheOwner(t *testing.T) {
-	for _, q := range []model.Quiz{
-		quizOf(owner, true, false),
-		quizOf(owner, true, true),
-	} {
-		if rightsOn(&q, stranger).Owner {
-			t.Fatalf("quiz(public=%v, allowEdit=%v) made a stranger the owner",
-				q.IsPublic, q.AllowEdit)
-		}
+// Sharing is the owner's Pro feature: when their plan lapses the grant is
+// suspended, not honoured.
+func TestRightsOnSuspendsEditorsWhenOwnerCannotShare(t *testing.T) {
+	q := quizOf(owner)
+	if got := rightsOn(&q, editor, grantFor(q.ID, editor), false); got != (quizRights{}) {
+		t.Fatalf("editor kept %+v after the owner lost sharing", got)
 	}
 }
 
 func TestRightsOnHandlesAMissingQuiz(t *testing.T) {
-	if got := rightsOn(nil, owner); got != (quizRights{}) {
+	if got := rightsOn(nil, owner, nil, true); got != (quizRights{}) {
 		t.Fatalf("a nil quiz granted %+v", got)
 	}
 }
 
-// Unpublishing clears allow_edit, so publishing again later cannot silently
-// reopen editing the owner believes they switched off.
-func TestNormalizeSharingClearsEditWhenUnpublished(t *testing.T) {
-	cases := []struct {
-		inPublic, inEdit     bool
-		wantPublic, wantEdit bool
-	}{
-		{false, false, false, false},
-		{false, true, false, false},
-		{true, false, true, false},
-		{true, true, true, true},
+// UpdateQuiz binds UpdateQuizReq and writes what it is given. If anything about
+// sharing ever appears in that payload, an editor's save becomes a way to grant
+// access onward.
+func TestUpdateQuizReqCannotCarrySharing(t *testing.T) {
+	forbidden := map[string]bool{
+		"is_public": true, "allow_edit": true, "host_id": true,
+		"collaborators": true, "email": true,
 	}
-	for _, tc := range cases {
-		gotPublic, gotEdit := normalizeSharing(tc.inPublic, tc.inEdit)
-		if gotPublic != tc.wantPublic || gotEdit != tc.wantEdit {
-			t.Fatalf("normalizeSharing(%v, %v) = (%v, %v), want (%v, %v)",
-				tc.inPublic, tc.inEdit, gotPublic, gotEdit, tc.wantPublic, tc.wantEdit)
-		}
-	}
-}
-
-// UpdateQuiz binds UpdateQuizReq and writes every field it is given. If a
-// sharing flag ever appears in that payload, saving a quiz becomes a way to
-// publish one — so assert neither is bindable there.
-func TestUpdateQuizReqCannotCarrySharingFlags(t *testing.T) {
-	var req UpdateQuizReq
-	body := `{"title":"t","is_public":true,"allow_edit":true}`
-	if err := json.Unmarshal([]byte(body), &req); err != nil {
-		t.Fatalf("payload did not bind: %v", err)
-	}
-
-	forbidden := map[string]bool{"is_public": true, "allow_edit": true}
 	var walk func(reflect.Type)
 	walk = func(rt reflect.Type) {
 		for i := 0; i < rt.NumField(); i++ {
@@ -154,12 +114,67 @@ func TestUpdateQuizReqCannotCarrySharingFlags(t *testing.T) {
 			}
 			name := strings.Split(f.Tag.Get("json"), ",")[0]
 			if forbidden[name] {
-				t.Fatalf("UpdateQuizReq exposes %q — sharing flags must only be "+
-					"writable through PATCH /quizzes/:id/sharing", name)
+				t.Fatalf("UpdateQuizReq exposes %q", name)
 			}
 		}
 	}
-	walk(reflect.TypeOf(req))
+	walk(reflect.TypeOf(UpdateQuizReq{}))
+}
+
+// The retired flags must not reach clients through model.Quiz either:
+// UpdateQuiz serialises the model directly.
+func TestQuizModelNoLongerSerialisesSharingFlags(t *testing.T) {
+	b, err := json.Marshal(model.Quiz{IsPublic: true, AllowEdit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"is_public", "allow_edit"} {
+		if strings.Contains(string(b), `"`+k+`"`) {
+			t.Fatalf("model.Quiz still serialises %q: %s", k, b)
+		}
+	}
+}
+
+// Invited addresses ------------------------------------------------------------
+
+func TestNormalizeCollaboratorEmail(t *testing.T) {
+	ok := map[string]string{
+		"a@b.vn":             "a@b.vn",
+		"  Mai@Example.COM ": "mai@example.com",
+	}
+	for in, want := range ok {
+		got, valid := normalizeCollaboratorEmail(in)
+		if !valid || got != want {
+			t.Fatalf("normalizeCollaboratorEmail(%q) = %q,%v, want %q", in, got, valid, want)
+		}
+	}
+	for _, bad := range []string{
+		"", "   ", "not-an-email", "a@b.vn, c@d.vn", "Mai <mai@b.vn>",
+		"a@b.vn\r\nBcc: x@y.vn", strings.Repeat("a", 251) + "@b.vn",
+	} {
+		if got, valid := normalizeCollaboratorEmail(bad); valid {
+			t.Fatalf("normalizeCollaboratorEmail(%q) accepted %q", bad, got)
+		}
+	}
+}
+
+// The invite renders the owner's nickname and quiz title — both typed by a
+// user — into HTML that lands in someone else's inbox.
+func TestShareInviteHTMLEscapesUserText(t *testing.T) {
+	out := shareInviteHTML(`<script>x</script>`, 7, `"><img src=x>`, true)
+	if strings.Contains(out, "<script>") || strings.Contains(out, `"><img`) {
+		t.Fatalf("invite HTML is not escaped: %s", out)
+	}
+}
+
+func TestToCollaboratorItemStatus(t *testing.T) {
+	id := uint(9)
+	if s := toCollaboratorItem(model.QuizCollaborator{UserID: &id}).Status; s != "active" {
+		t.Fatalf("linked grant reported %q", s)
+	}
+	if s := toCollaboratorItem(model.QuizCollaborator{}).Status; s != "pending" {
+		t.Fatalf("unlinked grant reported %q", s)
+	}
 }
 
 // Query parsing ---------------------------------------------------------------
@@ -246,16 +261,16 @@ func TestAuthorDisplayNameFallsBackWhenNicknameIsBlank(t *testing.T) {
 	}
 }
 
-// sharedQuizItem is what leaves the server for every logged-in host. Assert the
-// author's identifying columns are not on it — model.Quiz carries host_id, and
-// preloading the author would carry their email.
+// sharedQuizItem is what an editor sees about someone else's quiz. Assert the
+// owner's identifying columns are not on it — model.Quiz carries host_id, and
+// preloading the owner would carry their email.
 func TestSharedQuizItemDoesNotLeakTheAuthorsIdentity(t *testing.T) {
 	leaky := map[string]bool{"host_id": true, "email": true, "host": true, "author": true}
 	rt := reflect.TypeOf(sharedQuizItem{})
 	for i := 0; i < rt.NumField(); i++ {
 		name := strings.Split(rt.Field(i).Tag.Get("json"), ",")[0]
 		if leaky[name] {
-			t.Fatalf("sharedQuizItem exposes %q to every host on the platform", name)
+			t.Fatalf("sharedQuizItem exposes %q to editors", name)
 		}
 	}
 }
@@ -289,14 +304,13 @@ func TestDenyQuizAccessHidesQuizzesTheCallerCannotSee(t *testing.T) {
 	}
 }
 
-// One they can see but not change gets an honest 403, and the message has to
-// name the way forward: on a shared quiz that is always "duplicate it".
-func TestDenyQuizAccessPointsAReaderAtDuplicating(t *testing.T) {
-	code, msg := denyOf(t, quizRights{View: true, Host: true, Copy: true})
+// An editor asking for an owner-only action gets an honest 403 that says so.
+func TestDenyQuizAccessTellsAnEditorItIsOwnerOnly(t *testing.T) {
+	code, msg := denyOf(t, quizRights{View: true, Edit: true})
 	if code != http.StatusForbidden {
-		t.Fatalf("a read-only shared quiz answered %d, want 403", code)
+		t.Fatalf("an editor was answered %d, want 403", code)
 	}
-	if msg != "This shared quiz is read-only — duplicate it to make changes" {
+	if msg != "Only the quiz owner can do this" {
 		t.Fatalf("unexpected message %q — it must match the catalog entry", msg)
 	}
 }
