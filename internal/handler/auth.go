@@ -111,6 +111,9 @@ func Login(c *gin.Context) {
 	db.DB.Model(&model.User{}).Where("id = ?", user.ID).
 		Updates(map[string]any{"last_login_at": now, "last_login_ip": c.ClientIP()})
 	audit.Log(c, user.ID, "login_success", fmt.Sprintf("user_%d", user.ID), map[string]any{"role": roleName})
+	// Register already claims invites; this catches accounts made some other
+	// way (admin seeding, a case mismatch) before any invite existed.
+	claimPendingInvites(user.ID, user.Email)
 
 	c.JSON(http.StatusOK, gin.H{
 		"token":         token,
@@ -303,6 +306,7 @@ func VerifyOTP(c *gin.Context) {
 	}
 
 	_ = license.EnsureFreeSubscription(newUser.ID)
+	claimPendingInvites(newUser.ID, newUser.Email)
 
 	// Delete OTP and attempts from Redis
 	cache.RDB.Del(ctx, otpKey)

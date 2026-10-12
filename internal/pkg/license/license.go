@@ -42,6 +42,9 @@ type Entitlements struct {
 	AllowExportLogs      bool   `json:"allow_export_logs"`
 	AllowPrioritySupport bool   `json:"allow_priority_support"`
 	AllowRemoveWatermark bool   `json:"allow_remove_watermark"`
+	// Sharing is gated on the quiz owner's plan; editors need none.
+	AllowQuizSharing        bool `json:"allow_quiz_sharing"`
+	MaxCollaboratorsPerQuiz int  `json:"max_collaborators_per_quiz"`
 }
 
 // Usage mirrors current resource consumption for a host.
@@ -125,6 +128,10 @@ func openEntitlements() Entitlements {
 		AllowExportLogs:      true,
 		AllowPrioritySupport: true,
 		AllowRemoveWatermark: true,
+		// Bounded even when open: the cap is what keeps one quiz from being
+		// mailed to an arbitrary list through our SMTP.
+		AllowQuizSharing:        true,
+		MaxCollaboratorsPerQuiz: model.DefaultProCollaboratorsPerQuiz,
 	}
 }
 
@@ -147,6 +154,7 @@ func defaultFreeEntitlements() Entitlements {
 		AllowPlayerPaced:    false,
 		AllowCustomBranding: false,
 		AllowExportLogs:     false,
+		AllowQuizSharing:    false,
 	}
 }
 
@@ -155,18 +163,20 @@ func entitlementsFromPlan(p *model.PricingPlan) Entitlements {
 		return defaultFreeEntitlements()
 	}
 	return Entitlements{
-		PlanID:               p.ID,
-		PlanName:             p.Name,
-		MaxPlayersPerRoom:    p.MaxPlayersPerRoom,
-		MaxQuizzes:           p.MaxQuizzes,
-		MaxTemplates:         p.MaxTemplates,
-		MaxConcurrentRooms:   p.MaxConcurrentRooms,
-		MaxQuestionsPerQuiz:  p.MaxQuestionsPerQuiz,
-		AllowPlayerPaced:     p.AllowPlayerPaced,
-		AllowCustomBranding:  p.AllowCustomBranding,
-		AllowExportLogs:      p.AllowExportLogs,
-		AllowPrioritySupport: p.AllowPrioritySupport,
-		AllowRemoveWatermark: p.AllowRemoveWatermark,
+		PlanID:                  p.ID,
+		PlanName:                p.Name,
+		MaxPlayersPerRoom:       p.MaxPlayersPerRoom,
+		MaxQuizzes:              p.MaxQuizzes,
+		MaxTemplates:            p.MaxTemplates,
+		MaxConcurrentRooms:      p.MaxConcurrentRooms,
+		MaxQuestionsPerQuiz:     p.MaxQuestionsPerQuiz,
+		AllowPlayerPaced:        p.AllowPlayerPaced,
+		AllowCustomBranding:     p.AllowCustomBranding,
+		AllowExportLogs:         p.AllowExportLogs,
+		AllowPrioritySupport:    p.AllowPrioritySupport,
+		AllowRemoveWatermark:    p.AllowRemoveWatermark,
+		AllowQuizSharing:        p.AllowQuizSharing,
+		MaxCollaboratorsPerQuiz: p.MaxCollaboratorsPerQuiz,
 	}
 }
 
@@ -420,20 +430,22 @@ func UpdatePlanLimits(planID string, patch map[string]interface{}) (*model.Prici
 	}
 
 	allowed := map[string]bool{
-		"max_players_per_room":   true,
-		"max_quizzes":            true,
-		"max_templates":          true,
-		"max_concurrent_rooms":   true,
-		"max_questions_per_quiz": true,
-		"allow_player_paced":     true,
-		"allow_custom_branding":  true,
-		"allow_export_logs":      true,
-		"allow_priority_support": true,
-		"allow_remove_watermark": true,
-		"price_monthly_vnd":      true,
-		"description":            true,
-		"name":                   true,
-		"is_active":              true,
+		"max_players_per_room":       true,
+		"max_quizzes":                true,
+		"max_templates":              true,
+		"max_concurrent_rooms":       true,
+		"max_questions_per_quiz":     true,
+		"allow_player_paced":         true,
+		"allow_custom_branding":      true,
+		"allow_export_logs":          true,
+		"allow_priority_support":     true,
+		"allow_remove_watermark":     true,
+		"allow_quiz_sharing":         true,
+		"max_collaborators_per_quiz": true,
+		"price_monthly_vnd":          true,
+		"description":                true,
+		"name":                       true,
+		"is_active":                  true,
 	}
 
 	clean := map[string]interface{}{}

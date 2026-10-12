@@ -37,14 +37,14 @@ type CreateQuizReq struct {
 
 // UpdateQuizReq is the body of PUT /quizzes/:id.
 //
-// It carries no sharing flags: is_public and allow_edit belong to the owner and
-// are only writable through PATCH /quizzes/:id/sharing, or anyone holding edit
-// rights on a public quiz could change who else may edit it.
+// It carries nothing about sharing: who may edit is the owner's decision and
+// only changes through /quizzes/:id/collaborators, or an editor could use a
+// save to grant access onward.
 type UpdateQuizReq struct {
 	CreateQuizReq
 	// ExpectedUpdatedAt is quizzes.updated_at as the editor loaded it. When
 	// present the write only lands if the row has not moved since, which is
-	// what stops two people editing a public quiz from overwriting each other.
+	// what stops the owner and an editor from overwriting each other.
 	// Optional so an older client keeps working — it just keeps the old
 	// last-write-wins behaviour.
 	ExpectedUpdatedAt *time.Time `json:"expected_updated_at"`
@@ -276,10 +276,9 @@ func ListQuizzes(c *gin.Context) {
 		CreatedAt     time.Time `json:"created_at"`
 		UpdatedAt     time.Time `json:"updated_at"`
 		QuestionCount int64     `json:"question_count"`
-		// So the owner's own list can show which of their quizzes are shared
-		// without a second round trip per card.
-		IsPublic  bool `json:"is_public"`
-		AllowEdit bool `json:"allow_edit"`
+		// How many addresses the quiz is shared with, so the owner's list can
+		// badge shared quizzes without a round trip per card.
+		CollaboratorCount int64 `json:"collaborator_count"`
 	}
 
 	var quizzes []model.Quiz
@@ -289,6 +288,7 @@ func ListQuizzes(c *gin.Context) {
 	}
 
 	counts := map[uint]int64{}
+	shared := map[uint]int64{}
 	if len(quizzes) > 0 {
 		ids := make([]uint, len(quizzes))
 		for i, q := range quizzes {
@@ -307,22 +307,31 @@ func ListQuizzes(c *gin.Context) {
 		for _, r := range rows {
 			counts[r.QuizID] = r.Cnt
 		}
+
+		var shareRows []countRow
+		_ = db.DB.Model(&model.QuizCollaborator{}).
+			Select("quiz_id, COUNT(*) AS cnt").
+			Where("quiz_id IN ?", ids).
+			Group("quiz_id").
+			Scan(&shareRows).Error
+		for _, r := range shareRows {
+			shared[r.QuizID] = r.Cnt
+		}
 	}
 
 	// Always JSON [] (never null) for an empty list
 	out := make([]quizListItem, 0, len(quizzes))
 	for _, q := range quizzes {
 		out = append(out, quizListItem{
-			ID:            q.ID,
-			HostID:        q.HostID,
-			Title:         q.Title,
-			Description:   q.Description,
-			ThemeConfig:   q.ThemeConfig,
-			CreatedAt:     q.CreatedAt,
-			UpdatedAt:     q.UpdatedAt,
-			QuestionCount: counts[q.ID],
-			IsPublic:      q.IsPublic,
-			AllowEdit:     q.AllowEdit,
+			ID:                q.ID,
+			HostID:            q.HostID,
+			Title:             q.Title,
+			Description:       q.Description,
+			ThemeConfig:       q.ThemeConfig,
+			CreatedAt:         q.CreatedAt,
+			UpdatedAt:         q.UpdatedAt,
+			QuestionCount:     counts[q.ID],
+			CollaboratorCount: shared[q.ID],
 		})
 	}
 
@@ -338,10 +347,9 @@ func GetQuiz(c *gin.Context) {
 		return
 	}
 
-	// Loaded without the owner filter so a shared quiz resolves; rightsOn then
-	// decides. The response carries the correct answers and the explanation
-	// slides, which is exactly what publishing a quiz gives away — the warning
-	// belongs on the share toggle in the UI, not here.
+	// Loaded without the owner filter so a shared quiz resolves; loadQuizRights
+	// then decides. The response carries the correct answers and the
+	// explanation slides, so only the owner and invited editors may get it.
 	var quiz model.Quiz
 	if err := db.DB.Preload("Questions", func(db *gorm.DB) *gorm.DB {
 		return db.Order("questions.order ASC, questions.id ASC")
@@ -350,7 +358,11 @@ func GetQuiz(c *gin.Context) {
 		return
 	}
 
-	rights := rightsOn(&quiz, userID.(uint))
+	rights, err := loadQuizRights(&quiz, userID.(uint))
+	if err != nil {
+		writeRightsError(c)
+		return
+	}
 	if !rights.View {
 		denyQuizAccess(c, rights)
 		return
@@ -369,17 +381,19 @@ func GetQuiz(c *gin.Context) {
 		"title":        quiz.Title,
 		"description":  quiz.Description,
 		"theme_config": quiz.ThemeConfig,
-		"is_public":    quiz.IsPublic,
-		"allow_edit":   quiz.AllowEdit,
 		"questions":    questions,
 		"created_at":   quiz.CreatedAt,
 		"updated_at":   quiz.UpdatedAt,
 		// What this caller may do, so the editor does not have to re-derive the
 		// rule client-side and get it wrong.
-		"is_owner": rights.Owner,
-		"can_edit": rights.Edit,
-		"can_host": rights.Host,
-		"can_copy": rights.Copy,
+		"is_owner":  rights.Owner,
+		"can_edit":  rights.Edit,
+		"can_host":  rights.Host,
+		"can_copy":  rights.Copy,
+		"can_share": rights.Owner,
+		// Display name only, for the editor's "you are editing X's quiz"
+		// banner — never the owner's email.
+		"owner_name": ownerNameFor(&quiz, rights),
 	})
 }
 
@@ -428,15 +442,18 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
-	// Verify the quiz exists and that this host may run it: their own, or one
-	// its owner published. The room still records uid as HostID, so the room,
-	// its players and its logs belong to whoever opened it, not to the author.
+	// Verify the quiz exists and that this host may run it. Only the owner may:
+	// an invited editor can change the questions but not open rooms, since the
+	// room, its players and its logs would belong to the editor.
 	var quiz model.Quiz
 	if err := db.DB.Preload("Questions").Where("id = ?", uint(quizID)).First(&quiz).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
-	if rights := rightsOn(&quiz, uid); !rights.Host {
+	if rights, err := loadQuizRights(&quiz, uid); err != nil {
+		writeRightsError(c)
+		return
+	} else if !rights.Host {
 		denyQuizAccess(c, rights)
 		return
 	}
@@ -2354,7 +2371,10 @@ func UpdateQuiz(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Quiz not found"})
 		return
 	}
-	if rights := rightsOn(&quiz, userID.(uint)); !rights.Edit {
+	if rights, err := loadQuizRights(&quiz, userID.(uint)); err != nil {
+		writeRightsError(c)
+		return
+	} else if !rights.Edit {
 		denyQuizAccess(c, rights)
 		return
 	}
@@ -2362,8 +2382,8 @@ func UpdateQuiz(c *gin.Context) {
 	// Every gameplay step reads the questions live, and the sync below deletes
 	// the ones missing from the payload — so an edit landing mid-game rewrites
 	// the question list under a room that is already running it. A shared quiz
-	// can be edited and hosted by different people at once, so the room at risk
-	// is very often not the editor's own and not on their screen. That is
+	// can be edited by an invited editor while its owner is hosting it, so the
+	// room at risk is very often not on the editor's screen. That is
 	// exactly why this check cannot be left to the UI.
 	live, err := quizHasActiveRoom(quiz.ID)
 	if err != nil {
@@ -2407,8 +2427,6 @@ func UpdateQuiz(c *gin.Context) {
 	// silently overwrite each other. The check runs inside the UPDATE, because
 	// comparing in Go and then saving leaves a window between the two.
 	//
-	// The flags are absent from the map on purpose — is_public and allow_edit
-	// are the owner's, and are only writable through PATCH /quizzes/:id/sharing.
 	updates := map[string]interface{}{
 		"title":        req.Title,
 		"description":  req.Description,
@@ -2576,6 +2594,12 @@ func DeleteQuiz(c *gin.Context) {
 		return
 	}
 	invalidateQuizQuestions(quiz.ID)
+	// The quiz is soft-deleted, so the FK cascade does not fire. Grants on a
+	// deleted quiz are dead weight, and would come back alive if the row were
+	// ever restored — drop them now.
+	if err := db.DB.Where("quiz_id = ?", quiz.ID).Delete(&model.QuizCollaborator{}).Error; err != nil {
+		log.Printf("[SHARE] could not drop collaborators of deleted quiz %d: %v", quiz.ID, err)
+	}
 
 	// Record Audit Log
 	audit.Record(userID.(uint), "delete_quiz", fmt.Sprintf("quiz_%d", id), c.ClientIP())
