@@ -20,7 +20,8 @@ import (
 
 // OrderTTL is how long a QR stays payable. Short on purpose: a code that lives
 // for days is a code a buyer pays twice, after forgetting the first transfer.
-// Money that arrives after expiry is still kept — it goes to review.
+// Money that arrives after expiry is still kept: the exact amount settles the
+// expired order (see settle), anything else goes to review.
 const OrderTTL = 30 * time.Minute
 
 var (
@@ -50,8 +51,16 @@ func CheckoutEnabled() bool {
 	return err == nil && on && CheckoutConfigured()
 }
 
-// CreateOrder opens a checkout for productID. Any pending order the user
-// already has is cancelled in the same transaction: one live QR per buyer.
+// CreateOrder opens a checkout for productID, keeping one live QR per buyer.
+//
+// What happens to the buyer's existing pending order, in the same transaction:
+//   - still within its TTL, same product and price → returned as is. Reopening
+//     the checkout page must not cancel a QR the buyer may already have paid
+//     while the webhook is still on its way; a cancelled order sends that
+//     money to review instead of settling it.
+//   - past its TTL (the sweep runs every few minutes) → expired, not
+//     cancelled, so a late transfer still settles automatically.
+//   - still live but for another product or price → cancelled (superseded).
 func CreateOrder(userID uint, productID string) (*model.PaymentOrder, error) {
 	if !CheckoutEnabled() {
 		return nil, ErrCheckoutClosed
@@ -82,10 +91,29 @@ func createOrderOnce(userID uint, productID string) (*model.PaymentOrder, error)
 			return ErrProductUnavailable
 		}
 
-		if err := tx.Model(&model.PaymentOrder{}).
+		var open []model.PaymentOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ? AND status = ?", userID, model.OrderPending).
-			Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
+			Find(&open).Error; err != nil {
 			return err
+		}
+		now := time.Now()
+		for _, o := range open {
+			switch {
+			case now.After(o.ExpiresAt):
+				if err := tx.Model(&model.PaymentOrder{}).Where("id = ?", o.ID).
+					Update("status", model.OrderExpired).Error; err != nil {
+					return err
+				}
+			case o.ProductID == p.ID && o.AmountVND == p.AmountVND:
+				order = o
+				return nil
+			default:
+				if err := tx.Model(&model.PaymentOrder{}).Where("id = ?", o.ID).
+					Updates(map[string]any{"status": model.OrderCancelled, "note": "superseded by a new checkout"}).Error; err != nil {
+					return err
+				}
+			}
 		}
 
 		order = model.PaymentOrder{
@@ -302,7 +330,8 @@ func AdminCancel(code, note string, actorID uint) (*model.PaymentOrder, error) {
 }
 
 // ExpireStale closes pending orders past their TTL. A transfer that still
-// arrives for one is not lost: it is matched by code and sent to review.
+// arrives for one is not lost: it is matched by code, and settles the order
+// when the amount is exact (review otherwise).
 func ExpireStale() (int64, error) {
 	res := db.DB.Model(&model.PaymentOrder{}).
 		Where("status = ? AND expires_at < ?", model.OrderPending, time.Now()).

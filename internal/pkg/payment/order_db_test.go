@@ -86,13 +86,26 @@ func TestCreateOrderLifecycle(t *testing.T) {
 		t.Fatalf("bad checkout %+v", info)
 	}
 
-	// A second checkout supersedes the first.
+	// Reopening the checkout for the same product resumes the live order: the
+	// buyer may already have paid it.
 	o2, err := CreateOrder(uid, "pro_1m")
 	must(t, err)
-	var first model.PaymentOrder
-	must(t, db.DB.Where("order_code = ?", o1.OrderCode).First(&first).Error)
-	if first.Status != model.OrderCancelled {
-		t.Fatalf("first order status %s, want cancelled", first.Status)
+	if o2.OrderCode != o1.OrderCode {
+		t.Fatalf("reopen gave a new order %s, want %s", o2.OrderCode, o1.OrderCode)
+	}
+	if got := reload(t, o1.OrderCode); got.Status != model.OrderPending {
+		t.Fatalf("first order status %s, want pending", got.Status)
+	}
+
+	// A checkout for another product supersedes it.
+	must(t, db.DB.Create(&model.PaymentProduct{ID: "pro_3m", PlanID: "pro", Name: "Pro 3m", DurationDays: 90, AmountVND: 499000, IsActive: true}).Error)
+	o3, err := CreateOrder(uid, "pro_3m")
+	must(t, err)
+	if o3.OrderCode == o1.OrderCode {
+		t.Fatal("another product reused the old order")
+	}
+	if got := reload(t, o1.OrderCode); got.Status != model.OrderCancelled {
+		t.Fatalf("first order status %s, want cancelled", got.Status)
 	}
 
 	// Owner only.
@@ -220,6 +233,37 @@ func TestConcurrentConfirmGrantsOnce(t *testing.T) {
 }
 
 // Concurrent checkouts by one user leave exactly one pending order.
+// A QR past its TTL but not yet swept, then "New QR": the old order must end up
+// expired, not cancelled, so a transfer still on its way settles it.
+func TestNewQRAfterExpiryKeepsLatePaymentAutomatic(t *testing.T) {
+	setupDB(t)
+	uid := newUser(t, "a@x.vn", "free", nil)
+	o1, err := CreateOrder(uid, "pro_1m")
+	must(t, err)
+	must(t, db.DB.Model(&model.PaymentOrder{}).Where("id = ?", o1.ID).
+		Update("expires_at", time.Now().Add(-time.Minute)).Error)
+
+	o2, err := CreateOrder(uid, "pro_1m")
+	must(t, err)
+	if o2.OrderCode == o1.OrderCode {
+		t.Fatal("expired order was reused")
+	}
+	if got := reload(t, o1.OrderCode); got.Status != model.OrderExpired {
+		t.Fatalf("old order status %s, want expired", got.Status)
+	}
+
+	out, _ := apply(t, hook("CK "+o1.OrderCode, 199000))
+	if !out.Paid {
+		t.Fatalf("late exact payment not settled: %+v", out)
+	}
+	if got := reload(t, o1.OrderCode); got.Status != model.OrderPaid {
+		t.Fatalf("old order status %s, want paid", got.Status)
+	}
+	if got := reload(t, o2.OrderCode); got.Status != model.OrderPending {
+		t.Fatalf("new order status %s, want pending", got.Status)
+	}
+}
+
 func TestConcurrentCreateLeavesOnePending(t *testing.T) {
 	setupDB(t)
 	uid := newUser(t, "a@x.vn", "free", nil)
