@@ -406,17 +406,43 @@ func promoteAdminEmails(adminRole model.Role) {
 }
 
 func seedPricingPlans() {
+	// Paid tiers share every limit except players per room and the two
+	// feature columns the price list differentiates on: custom branding
+	// (Pro, Business) and contact-sales / custom work (Business).
+	paid := func(id, name, desc string, monthly, players int, branding, contact bool, sort int) model.PricingPlan {
+		return model.PricingPlan{
+			ID:                      id,
+			Name:                    name,
+			Description:             desc,
+			PriceMonthlyVND:         monthly,
+			MaxPlayersPerRoom:       players,
+			MaxQuizzes:              -1, // unlimited
+			MaxTemplates:            -1,
+			MaxConcurrentRooms:      10,
+			MaxQuestionsPerQuiz:     100,
+			AllowPlayerPaced:        true,
+			AllowCustomBranding:     branding,
+			AllowExportLogs:         true,
+			AllowPrioritySupport:    true,
+			AllowRemoveWatermark:    true,
+			AllowQuizSharing:        true,
+			MaxCollaboratorsPerQuiz: model.DefaultProCollaboratorsPerQuiz,
+			ContactSales:            contact,
+			IsActive:                true,
+			SortOrder:               sort,
+		}
+	}
 	plans := []model.PricingPlan{
 		{
 			ID:                   "free",
-			Name:                 "Chưa kích hoạt",
-			Description:          "Tài khoản chưa mua dịch vụ. Liên hệ quản trị viên để được cấp gói.",
+			Name:                 "Free",
+			Description:          "Tạo quiz và tổ chức phòng chơi tới 10 người.",
 			PriceMonthlyVND:      0,
-			MaxPlayersPerRoom:    0,
-			MaxQuizzes:           0,
-			MaxTemplates:         0,
-			MaxConcurrentRooms:   0,
-			MaxQuestionsPerQuiz:  0,
+			MaxPlayersPerRoom:    10,
+			MaxQuizzes:           5,
+			MaxTemplates:         5,
+			MaxConcurrentRooms:   1,
+			MaxQuestionsPerQuiz:  20,
 			AllowPlayerPaced:     false,
 			AllowCustomBranding:  false,
 			AllowExportLogs:      false,
@@ -425,26 +451,9 @@ func seedPricingPlans() {
 			IsActive:             true,
 			SortOrder:            1,
 		},
-		{
-			ID:                      "pro",
-			Name:                    "Pro",
-			Description:             "Dành cho sự kiện / doanh nghiệp. Tới 2000 người/phòng, không watermark, player-paced, export logs.",
-			PriceMonthlyVND:         199000,
-			MaxPlayersPerRoom:       2000,
-			MaxQuizzes:              -1, // unlimited
-			MaxTemplates:            -1,
-			MaxConcurrentRooms:      10,
-			MaxQuestionsPerQuiz:     100,
-			AllowPlayerPaced:        true,
-			AllowCustomBranding:     true,
-			AllowExportLogs:         true,
-			AllowPrioritySupport:    true,
-			AllowRemoveWatermark:    true,
-			AllowQuizSharing:        true,
-			MaxCollaboratorsPerQuiz: model.DefaultProCollaboratorsPerQuiz,
-			IsActive:                true,
-			SortOrder:               2,
-		},
+		paid("edu", "Edu", "Dành cho lớp học và trường học. Tới 200 người/phòng, chia sẻ quiz.", 599000, 200, false, false, 2),
+		paid("pro", "Pro", "Dành cho sự kiện. Tới 2000 người/phòng, chỉnh sửa giao diện.", 799000, 2000, true, false, 3),
+		paid("business", "Business", "Dành cho doanh nghiệp. Tới 2000 người/phòng, tuỳ biến theo yêu cầu.", 0, 2000, true, true, 4),
 	}
 
 	for _, p := range plans {
@@ -461,15 +470,17 @@ func seedPricingPlans() {
 }
 
 // seedPaymentProducts creates the sellable terms once. Rows are created
-// inactive: the prices below are only a starting point derived from the Pro
-// monthly list price, and nothing goes on sale until an admin has reviewed the
+// inactive: the prices below are the 2026-10 list prices, and nothing goes on sale until an admin has reviewed the
 // price and switched the product on. Existing rows are never touched, so an
 // admin's price survives every restart.
 func seedPaymentProducts() {
 	products := []model.PaymentProduct{
-		{ID: "pro_1m", PlanID: "pro", Name: "Pro 1 tháng", DurationDays: 30, AmountVND: 199000, SortOrder: 1},
-		{ID: "pro_3m", PlanID: "pro", Name: "Pro 3 tháng", DurationDays: 90, AmountVND: 597000, SortOrder: 2},
-		{ID: "pro_12m", PlanID: "pro", Name: "Pro 12 tháng", DurationDays: 365, AmountVND: 2388000, SortOrder: 3},
+		{ID: "edu_1w", PlanID: "edu", Name: "Edu 1 tuần", DurationDays: 7, AmountVND: 159000, SortOrder: 1},
+		{ID: "edu_1m", PlanID: "edu", Name: "Edu 1 tháng", DurationDays: 30, AmountVND: 599000, SortOrder: 2},
+		{ID: "edu_1y", PlanID: "edu", Name: "Edu 1 năm", DurationDays: 365, AmountVND: 5999000, SortOrder: 3},
+		{ID: "pro_1w", PlanID: "pro", Name: "Pro 1 tuần", DurationDays: 7, AmountVND: 199000, SortOrder: 4},
+		{ID: "pro_1m", PlanID: "pro", Name: "Pro 1 tháng", DurationDays: 30, AmountVND: 799000, SortOrder: 5},
+		{ID: "pro_1y", PlanID: "pro", Name: "Pro 1 năm", DurationDays: 365, AmountVND: 7999000, SortOrder: 6},
 	}
 	for _, p := range products {
 		res := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&p)

@@ -29,6 +29,7 @@ var redeemUserErrors = []error{
 	license.ErrCodeExhausted,
 	license.ErrCodeAlreadyUsed,
 	license.ErrCodePlanInactive,
+	license.ErrCodeLowerTier,
 }
 
 func isRedeemUserError(err error) bool {

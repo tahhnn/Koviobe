@@ -12,9 +12,37 @@ import (
 )
 
 const (
-	PlanFree = "free"
-	PlanPro  = "pro"
+	PlanFree     = "free"
+	PlanEdu      = "edu"
+	PlanPro      = "pro"
+	PlanBusiness = "business"
 )
+
+// planRank orders the tiers from least to most capable. Only the guard against
+// redeeming a lower tier over a live higher one reads it; a plan missing here
+// (one an admin created by hand) is never blocked.
+var planRank = map[string]int{
+	PlanFree:     0,
+	PlanEdu:      1,
+	PlanPro:      2,
+	PlanBusiness: 3,
+}
+
+// replacesHigherLiveTerm reports whether granting planID would overwrite a
+// live term of a more capable plan. The subscription is one row per user, so
+// a Pro host redeeming an Edu code would otherwise lose Pro for the rest of
+// the term they paid for.
+func replacesHigherLiveTerm(now time.Time, current *model.Subscription, planID string) bool {
+	if current == nil || current.Status != "active" {
+		return false
+	}
+	if current.EndsAt != nil && !current.EndsAt.After(now) {
+		return false
+	}
+	cur, ok1 := planRank[current.PlanID]
+	next, ok2 := planRank[planID]
+	return ok1 && ok2 && cur > next
+}
 
 // Enforcing reports whether Free/Pro limits actually block API actions.
 //
@@ -442,6 +470,7 @@ func UpdatePlanLimits(planID string, patch map[string]interface{}) (*model.Prici
 		"allow_remove_watermark":     true,
 		"allow_quiz_sharing":         true,
 		"max_collaborators_per_quiz": true,
+		"contact_sales":              true,
 		"price_monthly_vnd":          true,
 		"description":                true,
 		"name":                       true,
