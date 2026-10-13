@@ -20,6 +20,16 @@ import (
 // threshold it missed rather than sending a stale warning late.
 var warnThresholds = []int{7, 3, 1}
 
+// warnsAt reports whether a term of termDays gets the threshold-day warning.
+// Only when the term is longer than twice the threshold: a 7-day term sold
+// today is already "7 days from expiry", and warning then tells a customer
+// who just paid that their plan is running out. So a week gets the 3- and
+// 1-day warnings, a month or a year all three. Kept as a function so the SQL
+// below and the dashboard banner (lib/license.ts) can follow the same rule.
+func warnsAt(termDays float64, threshold int) bool {
+	return termDays > float64(2*threshold)
+}
+
 // warnBatchLimit caps one pass. email.SendEmail is a synchronous SMTP dial, so
 // N hosts is N serial round trips — better to carry the tail to the next hour
 // than to hold the worker open for minutes.
@@ -58,6 +68,8 @@ func WarnExpiringSubscriptions() ([]ExpiryWarning, error) {
 		var due []model.Subscription
 		err := db.DB.
 			Where("ends_at IS NOT NULL AND ends_at > ? AND ends_at <= ?", now, now.AddDate(0, 0, threshold)).
+			// warnsAt in SQL: skip terms too short for this threshold.
+			Where("ends_at > starts_at + make_interval(days => ?)", 2*threshold).
 			Where("plan_id <> ?", PlanFree).
 			Where("status = ?", "active").
 			// Not yet warned for this exact term, or warned at a wider threshold.
