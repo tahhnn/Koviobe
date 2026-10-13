@@ -76,3 +76,37 @@ func TestComputeTermExtendNeverShortens(t *testing.T) {
 }
 
 func ptr(t time.Time) *time.Time { return &t }
+
+// One subscription row per user: redeeming a lower tier over a live higher one
+// would throw away the rest of a paid term, so it is refused. Upgrades, renewals,
+// lapsed terms and plans outside the known ladder go through.
+func TestReplacesHigherLiveTerm(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	future := now.AddDate(0, 0, 5)
+	past := now.AddDate(0, 0, -1)
+	sub := func(plan, status string, ends *time.Time) *model.Subscription {
+		return &model.Subscription{PlanID: plan, Status: status, EndsAt: ends}
+	}
+	cases := []struct {
+		name    string
+		current *model.Subscription
+		plan    string
+		want    bool
+	}{
+		{"no subscription", nil, PlanEdu, false},
+		{"pro live, edu code", sub(PlanPro, "active", &future), PlanEdu, true},
+		{"pro lifetime, edu code", sub(PlanPro, "active", nil), PlanEdu, true},
+		{"business live, pro code", sub(PlanBusiness, "active", &future), PlanPro, true},
+		{"pro lapsed, edu code", sub(PlanPro, "active", &past), PlanEdu, false},
+		{"pro canceled, edu code", sub(PlanPro, "canceled", &future), PlanEdu, false},
+		{"edu live, pro code (upgrade)", sub(PlanEdu, "active", &future), PlanPro, false},
+		{"pro live, pro code (renew)", sub(PlanPro, "active", &future), PlanPro, false},
+		{"free, edu code", sub(PlanFree, "active", nil), PlanEdu, false},
+		{"custom plan live, edu code", sub("vip", "active", &future), PlanEdu, false},
+	}
+	for _, c := range cases {
+		if got := replacesHigherLiveTerm(now, c.current, c.plan); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
