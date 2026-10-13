@@ -204,9 +204,10 @@ func Register(c *gin.Context) {
 		return
 	}
 
-	// Reset attempts limit on new registration
-	attemptsKey := fmt.Sprintf("otp_attempts:%s", req.Email)
-	cache.RDB.Del(ctx, attemptsKey)
+	// The failed-attempt counter is deliberately NOT cleared here. Clearing it
+	// let anyone guess 5 codes, request a new one a minute later, and repeat —
+	// about 7,000 guesses a day at someone else's address. It now lives for an
+	// hour (see VerifyOTP) whatever happens to the code.
 
 	// Send OTP email
 	htmlBody := fmt.Sprintf(`
@@ -258,11 +259,11 @@ func VerifyOTP(c *gin.Context) {
 	}
 
 	if attempts >= 5 {
-		// Invalidate OTP on too many failed attempts
+		// Invalidate the code. The counter is kept until it expires, so a
+		// fresh code does not come with a fresh set of guesses.
 		otpKey := fmt.Sprintf("otp:%s", req.Email)
 		cache.RDB.Del(ctx, otpKey)
-		cache.RDB.Del(ctx, attemptsKey)
-		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many failed verification attempts. Your verification code has been invalidated. Please register again."})
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many failed attempts. Please try again in an hour."})
 		return
 	}
 
@@ -289,7 +290,7 @@ func VerifyOTP(c *gin.Context) {
 	if !otpMatch {
 		// Increment attempts
 		cache.RDB.Incr(ctx, attemptsKey)
-		cache.RDB.Expire(ctx, attemptsKey, 10*time.Minute)
+		cache.RDB.Expire(ctx, attemptsKey, time.Hour)
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid verification code. Attempts remaining: %d", 5-(attempts+1))})
 		return
 	}
@@ -445,6 +446,11 @@ func ChangePassword(c *gin.Context) {
 		log.Printf("[ChangePassword] failed to revoke refresh tokens for user %d: %v", user.ID, err)
 		notify.P1("revoke_tokens_failed", "Đổi mật khẩu nhưng không thu hồi được refresh token (user=%d): %v — phiên cũ vẫn dùng được.", user.ID, err)
 	}
+
+	// A reset link requested before the change must not still work after it.
+	revokeCtx, revokeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	revokeResetToken(revokeCtx, user.ID)
+	revokeCancel()
 
 	// Record Audit Log
 	audit.Record(user.ID, "change_password", fmt.Sprintf("user_%d", user.ID), c.ClientIP())

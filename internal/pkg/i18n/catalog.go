@@ -44,6 +44,8 @@ var vi = map[string]string{
 	"This email address cannot receive mail":                                  "Địa chỉ email này không nhận được thư — kiểm tra lại tên miền",
 	"Please wait a minute before requesting another code":                     "Vui lòng đợi 1 phút trước khi yêu cầu mã mới",
 	"Failed to process request":                                               "Không xử lý được yêu cầu",
+	"This reset link is invalid or has expired":                               "Liên kết đặt lại mật khẩu không hợp lệ hoặc đã hết hạn",
+	"Human verification failed. Please try again.":                            "Xác minh không thành công, vui lòng thử lại",
 	"Authentication required: provide Authorization or X-Player-Token header": "Cần đăng nhập: thiếu header Authorization hoặc X-Player-Token",
 	"X-Player-Token header is required":                                       "Thiếu header X-Player-Token",
 	"X-Player-Token header is required for anonymous realtime token":          "Cần header X-Player-Token để lấy token realtime ẩn danh",
