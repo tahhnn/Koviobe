@@ -162,3 +162,18 @@ func TestSanitizeValidatesOverlayColour(t *testing.T) {
 		t.Errorf("a scrim survived with nothing to sit over: %s", out)
 	}
 }
+
+func TestHideAvatarsSurvivesSanitize(t *testing.T) {
+	out, err := Sanitize(`{"hide_avatars":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if AvatarsEnabled(out) {
+		t.Fatalf("hide_avatars dropped by Sanitize: %s", out)
+	}
+	for _, raw := range []string{"", "{}", `{"hide_avatars":false}`, "not json"} {
+		if !AvatarsEnabled(raw) {
+			t.Fatalf("AvatarsEnabled(%q) = false, want avatars on by default", raw)
+		}
+	}
+}

@@ -47,7 +47,7 @@ func roomSnapshot(roomID uint) ([]StandingRow, error) {
 	}
 	rows := []StandingRow{}
 	if err := db.DB.Model(&model.Player{}).
-		Select("id, nickname, score").
+		Select("id, nickname, avatar, score").
 		Where("room_id = ?", roomID).
 		Order("score DESC, id ASC").
 		Scan(&rows).Error; err != nil {

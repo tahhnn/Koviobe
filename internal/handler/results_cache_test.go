@@ -18,6 +18,7 @@ func legacyResults(room *model.Room, players []model.Player, stats json.RawMessa
 		standings = append(standings, gin.H{
 			"id":              p.ID,
 			"nickname":        p.Nickname,
+			"avatar":          p.Avatar,
 			"score":           p.Score,
 			"correct_answers": p.CorrectAnswers,
 			"rank":            i + 1,
@@ -39,7 +40,7 @@ func sampleResults() (*model.Room, []model.Player) {
 	room := &model.Room{Status: "finished", EndedReason: "", ThemeConfig: `{"bg":"<img src=x>&"}`}
 	room.ID = 269
 	players := []model.Player{
-		{Nickname: "alice", Score: 3000, CorrectAnswers: 3},
+		{Nickname: "alice", Avatar: "1f98a", Score: 3000, CorrectAnswers: 3},
 		{Nickname: "bob <b>", Score: 5000, CorrectAnswers: 5},
 		{Nickname: "chị Hà", Score: 3000, CorrectAnswers: 2},
 		{Nickname: "dup", Score: 10, CorrectAnswers: 0},

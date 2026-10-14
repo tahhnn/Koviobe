@@ -44,6 +44,11 @@ type Config struct {
 
 	PrimaryColor    string `json:"primary_color,omitempty"`
 	RemoveWatermark bool   `json:"remove_watermark,omitempty"`
+
+	// HideAvatars turns player emoji avatars off for this quiz (a formal exam,
+	// say). Stored as the negative so every theme written before the key
+	// existed — and "{}" — keeps avatars on. Not branding: every plan has it.
+	HideAvatars bool `json:"hide_avatars,omitempty"`
 }
 
 // MinOverlay is the floor for the scrim drawn over a background image.
@@ -192,4 +197,9 @@ func BrandingKeys(raw string) []string {
 // WantsRemoveWatermark reports whether a theme asks to drop the watermark.
 func WantsRemoveWatermark(raw string) bool {
 	return Parse(raw).RemoveWatermark
+}
+
+// AvatarsEnabled reports whether players in a room with this theme get avatars.
+func AvatarsEnabled(raw string) bool {
+	return !Parse(raw).HideAvatars
 }

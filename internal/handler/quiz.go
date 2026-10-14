@@ -19,6 +19,7 @@ import (
 	"github.com/quizzzone/backend/internal/db"
 	"github.com/quizzzone/backend/internal/model"
 	"github.com/quizzzone/backend/internal/pkg/audit"
+	"github.com/quizzzone/backend/internal/pkg/avatar"
 	"github.com/quizzzone/backend/internal/pkg/jwt"
 	"github.com/quizzzone/backend/internal/pkg/license"
 	"github.com/quizzzone/backend/internal/pkg/notify"
@@ -130,6 +131,9 @@ type QuestionReq struct {
 type JoinRoomReq struct {
 	PinCode  string `json:"pin_code" binding:"required,len=6,numeric"`
 	Nickname string `json:"nickname" binding:"required,min=1,max=20"`
+	// Avatar is optional and never rejected: avatar.Resolve swaps anything
+	// missing or unknown for a random pick (see internal/pkg/avatar).
+	Avatar string `json:"avatar"`
 }
 
 type UpdateRoomPrivacyReq struct {
@@ -741,9 +745,14 @@ func JoinRoom(c *gin.Context) {
 		}
 	}
 
+	playerAvatar := ""
+	if theme.AvatarsEnabled(room.ThemeConfig) {
+		playerAvatar = avatar.Resolve(req.Avatar)
+	}
 	player := model.Player{
 		RoomID:      room.ID,
 		Nickname:    req.Nickname,
+		Avatar:      playerAvatar,
 		Score:       0,
 		IsConnected: true,
 	}
@@ -838,6 +847,7 @@ func JoinRoom(c *gin.Context) {
 	if err := realtime.Client.Publish(channel, "player:joined", gin.H{
 		"player_id": player.ID,
 		"nickname":  player.Nickname,
+		"avatar":    player.Avatar,
 	}); err != nil {
 		log.Printf("[JoinRoom] realtime publish failed room=%d: %v", room.ID, err)
 		notify.P1("join_publish_failed", "Người chơi vào phòng nhưng push realtime thất bại (room=%d): %v — danh sách chờ của host không cập nhật.", room.ID, err)
@@ -846,6 +856,7 @@ func JoinRoom(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"player_id":      player.ID,
 		"nickname":       player.Nickname,
+		"avatar":         player.Avatar,
 		"room_id":        room.ID,
 		"theme_config":   room.ThemeConfig,
 		"player_token":   playerToken,
@@ -1772,11 +1783,12 @@ func EndQuestion(c *gin.Context) {
 	type PlayerScore struct {
 		ID       uint   `json:"id"`
 		Nickname string `json:"nickname"`
+		Avatar   string `json:"avatar"`
 		Score    int    `json:"score"`
 	}
 	var leaderboard []PlayerScore
 	db.DB.Model(&model.Player{}).
-		Select("id, nickname, score").
+		Select("id, nickname, avatar, score").
 		Where("room_id = ?", room.ID).
 		Order("score DESC, id ASC"). // same tie-break as roomSnapshot, so the reveal and the board agree
 		Limit(5).
@@ -1878,6 +1890,7 @@ const leaderboardTopN = 5
 type StandingRow struct {
 	ID       uint   `json:"id"`
 	Nickname string `json:"nickname"`
+	Avatar   string `json:"avatar"`
 	Score    int    `json:"score"`
 	Rank     int    `json:"rank"`
 }
@@ -1902,7 +1915,7 @@ func roomStandings(room *model.Room, callerNickname string) ([]StandingRow, *Sta
 		top := make([]StandingRow, 0, leaderboardTopN)
 		var me *StandingRow
 		for i, p := range players {
-			row := StandingRow{ID: p.ID, Nickname: p.Nickname, Score: p.Score, Rank: i + 1}
+			row := StandingRow{ID: p.ID, Nickname: p.Nickname, Avatar: p.Avatar, Score: p.Score, Rank: i + 1}
 			if i < leaderboardTopN {
 				top = append(top, row)
 			}
@@ -1930,9 +1943,9 @@ func roomStandings(room *model.Room, callerNickname string) ([]StandingRow, *Sta
 	var me *StandingRow
 	if callerNickname != "" {
 		var self model.Player
-		if err := db.DB.Select("id, nickname, score").
+		if err := db.DB.Select("id, nickname, avatar, score").
 			Where("room_id = ? AND nickname = ?", room.ID, callerNickname).First(&self).Error; err == nil {
-			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Score: self.Score,
+			me = &StandingRow{ID: self.ID, Nickname: self.Nickname, Avatar: self.Avatar, Score: self.Score,
 				Rank: rankAgainst(rows, self.Score, self.ID)}
 			// And the same score on their own line of the top list, so the slide
 			// never shows one player two different scores. top is this request's
@@ -2109,6 +2122,7 @@ func EndGame(c *gin.Context) {
 
 type finalRanking struct {
 	Nickname       string `json:"nickname"`
+	Avatar         string `json:"avatar,omitempty"`
 	Score          int    `json:"score"`
 	CorrectAnswers int    `json:"correct_answers"`
 }
@@ -2255,6 +2269,7 @@ func finalizeRoom(roomID uint, reason string) (rankings []finalRanking, alreadyE
 	for _, p := range players {
 		rankings = append(rankings, finalRanking{
 			Nickname:       p.Nickname,
+			Avatar:         p.Avatar,
 			Score:          p.Score,
 			CorrectAnswers: int(correctByPlayer[p.ID]),
 		})
@@ -2880,6 +2895,7 @@ func GetRoomResults(c *gin.Context) {
 		standings = append(standings, gin.H{
 			"id":              p.ID,
 			"nickname":        p.Nickname,
+			"avatar":          p.Avatar,
 			"score":           p.Score,
 			"correct_answers": p.CorrectAnswers,
 			"rank":            i + 1,
@@ -3158,6 +3174,8 @@ func GetRoomByPin(c *gin.Context) {
 		"player_count": playerCount,
 		"plan_id":      ents.PlanID,
 		"plan_name":    ents.PlanName,
+		// The join page shows the avatar picker only when this is true.
+		"avatars_enabled": theme.AvatarsEnabled(room.ThemeConfig),
 	})
 }
 
@@ -3170,6 +3188,7 @@ func archivedPlayers(roomID uint) []model.Player {
 	if db.DB.Where("room_id = ?", roomID).First(&session).Error == nil {
 		type Ranking struct {
 			Nickname       string `json:"nickname"`
+			Avatar         string `json:"avatar"`
 			Score          int    `json:"score"`
 			CorrectAnswers int    `json:"correct_answers"`
 		}
@@ -3181,6 +3200,7 @@ func archivedPlayers(roomID uint) []model.Player {
 					ID:             uint(i + 1),
 					RoomID:         roomID,
 					Nickname:       r.Nickname,
+					Avatar:         r.Avatar,
 					Score:          r.Score,
 					CorrectAnswers: r.CorrectAnswers,
 				}

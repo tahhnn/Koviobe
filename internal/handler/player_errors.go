@@ -62,6 +62,7 @@ func reconnectPlayer(p *model.Player, room *model.Room) {
 		if err := realtime.Client.Publish(realtime.RoomChannel(room.PinCode), "player:joined", gin.H{
 			"player_id": p.ID,
 			"nickname":  p.Nickname,
+			"avatar":    p.Avatar,
 		}); err != nil {
 			log.Printf("[reconnectPlayer] publish failed room=%d: %v", room.ID, err)
 		}

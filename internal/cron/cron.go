@@ -163,6 +163,7 @@ func cleanupAbandonedRooms() {
 		// Archive rankings before deleting players (same shape as EndGame)
 		type Ranking struct {
 			Nickname       string `json:"nickname"`
+			Avatar         string `json:"avatar,omitempty"`
 			Score          int    `json:"score"`
 			CorrectAnswers int    `json:"correct_answers"`
 		}
@@ -177,6 +178,7 @@ func cleanupAbandonedRooms() {
 		for _, p := range players {
 			rankings = append(rankings, Ranking{
 				Nickname:       p.Nickname,
+				Avatar:         p.Avatar,
 				Score:          p.Score,
 				CorrectAnswers: int(correctByPlayer[p.ID]),
 			})

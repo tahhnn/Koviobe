@@ -153,10 +153,13 @@ type Room struct {
 
 // Player represents a participant in a Room.
 type Player struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	RoomID              uint       `gorm:"uniqueIndex:idx_room_nickname;not null" json:"room_id"`
-	UserID              *uint      `gorm:"index" json:"user_id,omitempty"` // Optional: null for Guest/Anonymous players
-	Nickname            string     `gorm:"size:100;uniqueIndex:idx_room_nickname;not null" json:"nickname"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	RoomID   uint   `gorm:"uniqueIndex:idx_room_nickname;not null" json:"room_id"`
+	UserID   *uint  `gorm:"index" json:"user_id,omitempty"` // Optional: null for Guest/Anonymous players
+	Nickname string `gorm:"size:100;uniqueIndex:idx_room_nickname;not null" json:"nickname"`
+	// Avatar is a Twemoji code from internal/pkg/avatar, or "" when the room
+	// hides avatars (theme hide_avatars) or the row predates the column.
+	Avatar              string     `gorm:"size:16;not null;default:''" json:"avatar"`
 	Score               int        `gorm:"default:0" json:"score"`
 	IsConnected         bool       `gorm:"default:true" json:"is_connected"`
 	CurrentQuestionID   *uint      `json:"current_question_id,omitempty"`

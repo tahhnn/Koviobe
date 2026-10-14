@@ -45,6 +45,7 @@ var resultsCache sync.Map // room id -> *resultsEntry
 // resultRow keeps the key order encoding/json gives the gin.H it replaces
 // (keys sorted), so the wire format does not change.
 type resultRow struct {
+	Avatar         string `json:"avatar"`
 	CorrectAnswers int    `json:"correct_answers"`
 	ID             uint   `json:"id"`
 	Nickname       string `json:"nickname"`
@@ -105,7 +106,7 @@ func (e *resultsEntry) fill(room *model.Room, players []model.Player, questionSt
 	e.youRow = make([][]byte, len(players))
 	e.byNick = make(map[string][]int, len(players))
 	for i, p := range players {
-		r := resultRow{CorrectAnswers: p.CorrectAnswers, ID: p.ID, Nickname: p.Nickname, Rank: i + 1, Score: p.Score}
+		r := resultRow{Avatar: p.Avatar, CorrectAnswers: p.CorrectAnswers, ID: p.ID, Nickname: p.Nickname, Rank: i + 1, Score: p.Score}
 		e.rows[i], _ = json.Marshal(r)
 		r.You = true
 		e.youRow[i], _ = json.Marshal(r)
