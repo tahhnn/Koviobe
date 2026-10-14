@@ -41,54 +41,66 @@ func RateLimit(prefix string, maxAttempts int64, window time.Duration, failClose
 // other's budget.
 func RateLimitKey(prefix, identity string, maxAttempts int64, window time.Duration, failClosed bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		bucket := identity
-		if bucket == "" {
-			bucket = c.ClientIP()
-		}
-		key := fmt.Sprintf("rate:%s:%s", prefix, bucket)
-		ctx := context.Background()
-
-		// INCR and EXPIRE must be atomic. Setting the TTL in a separate command,
-		// and only when count == 1, meant a crash or a failed EXPIRE in that gap
-		// left a key with no TTL — which never resets, so the IP stayed rate
-		// limited permanently. The script also re-arms a TTL that went missing.
-		res, err := incrWithTTL.Run(ctx, cache.RDB, []string{key}, int64(window.Seconds())).Result()
-		if err != nil {
-			log.Printf("[RateLimit] Redis error on %s: %v", prefix, err)
-			notify.P1("ratelimit_redis_error", "Redis lỗi ở limiter %q: %v — limiter đang fail-%s.", prefix, err, failMode(failClosed))
-			if failClosed {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
-				c.Abort()
-				return
-			}
+		if allowRate(c, prefix, identity, maxAttempts, window, failClosed) {
 			c.Next()
-			return
 		}
-
-		count, ok := res.(int64)
-		if !ok {
-			log.Printf("[RateLimit] unexpected Redis reply type %T on %s", res, prefix)
-			notify.P1("ratelimit_bad_reply", "Redis trả kiểu %T bất thường ở limiter %q — limiter đang fail-%s.", res, prefix, failMode(failClosed))
-			if failClosed {
-				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
-				c.Abort()
-				return
-			}
-			c.Next()
-			return
-		}
-
-		if count > maxAttempts {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error":       "Too many requests. Please wait before trying again.",
-				"retry_after": window.String(),
-			})
-			c.Abort()
-			return
-		}
-
-		c.Next()
 	}
+}
+
+// allowRate runs one limiter check without advancing the chain. It answers
+// and aborts on refusal and returns false; otherwise it returns true and the
+// caller decides when to call c.Next().
+//
+// Composite limiters (per-IP then per-user) must use this rather than calling
+// a RateLimit handler inline: that handler's c.Next() runs the route handler
+// before the second check, so the second limit never blocks anything and only
+// appends a 429 body to a response already written.
+func allowRate(c *gin.Context, prefix, identity string, maxAttempts int64, window time.Duration, failClosed bool) bool {
+	bucket := identity
+	if bucket == "" {
+		bucket = c.ClientIP()
+	}
+	key := fmt.Sprintf("rate:%s:%s", prefix, bucket)
+	ctx := context.Background()
+
+	// INCR and EXPIRE must be atomic. Setting the TTL in a separate command,
+	// and only when count == 1, meant a crash or a failed EXPIRE in that gap
+	// left a key with no TTL — which never resets, so the IP stayed rate
+	// limited permanently. The script also re-arms a TTL that went missing.
+	res, err := incrWithTTL.Run(ctx, cache.RDB, []string{key}, int64(window.Seconds())).Result()
+	if err != nil {
+		log.Printf("[RateLimit] Redis error on %s: %v", prefix, err)
+		notify.P1("ratelimit_redis_error", "Redis lỗi ở limiter %q: %v — limiter đang fail-%s.", prefix, err, failMode(failClosed))
+		if failClosed {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
+			c.Abort()
+			return false
+		}
+		return true
+	}
+
+	count, ok := res.(int64)
+	if !ok {
+		log.Printf("[RateLimit] unexpected Redis reply type %T on %s", res, prefix)
+		notify.P1("ratelimit_bad_reply", "Redis trả kiểu %T bất thường ở limiter %q — limiter đang fail-%s.", res, prefix, failMode(failClosed))
+		if failClosed {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Service temporarily unavailable. Please try again."})
+			c.Abort()
+			return false
+		}
+		return true
+	}
+
+	if count > maxAttempts {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":       "Too many requests. Please wait before trying again.",
+			"retry_after": window.String(),
+		})
+		c.Abort()
+		return false
+	}
+
+	return true
 }
 
 // JoinRoomRateLimit: JOIN_RATE_LIMIT_PER_MIN join attempts per IP per minute
@@ -142,10 +154,8 @@ func AuthRateLimit() gin.HandlerFunc {
 // so this is not what makes guessing infeasible — it caps the damage if a batch
 // ever leaks in a predictable range.
 func RedeemRateLimit() gin.HandlerFunc {
-	perIP := RateLimit("redeem_ip", 60, time.Minute, true)
 	return func(c *gin.Context) {
-		perIP(c)
-		if c.IsAborted() {
+		if !allowRate(c, "redeem_ip", "", 60, time.Minute, true) {
 			return
 		}
 		userID, exists := c.Get("user_id")
@@ -159,7 +169,9 @@ func RedeemRateLimit() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		RateLimitKey("redeem_user", strconv.FormatUint(uint64(uid), 10), 8, time.Minute, true)(c)
+		if allowRate(c, "redeem_user", strconv.FormatUint(uint64(uid), 10), 8, time.Minute, true) {
+			c.Next()
+		}
 	}
 }
 
@@ -233,10 +245,8 @@ func failMode(failClosed bool) string {
 // orders table; the IP cap is generous for the same shared-NAT reason as
 // RedeemRateLimit.
 func PaymentOrderRateLimit() gin.HandlerFunc {
-	perIP := RateLimit("pay_order_ip", 30, time.Minute, true)
 	return func(c *gin.Context) {
-		perIP(c)
-		if c.IsAborted() {
+		if !allowRate(c, "pay_order_ip", "", 30, time.Minute, true) {
 			return
 		}
 		uid, ok := c.Get("user_id")
@@ -249,7 +259,9 @@ func PaymentOrderRateLimit() gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		RateLimitKey("pay_order_user", strconv.FormatUint(uint64(id), 10), 5, time.Minute, true)(c)
+		if allowRate(c, "pay_order_user", strconv.FormatUint(uint64(id), 10), 5, time.Minute, true) {
+			c.Next()
+		}
 	}
 }
 
