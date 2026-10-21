@@ -6,7 +6,6 @@ import (
 )
 
 var sampleDefaults = Defaults{
-	Enabled:        true,
 	BgHostURL:      "/uploads/img-u1-host.webp",
 	BgPlayerURL:    "/uploads/img-u1-player.webp",
 	LogoURL:        "/uploads/img-u1-logo.png",
@@ -23,16 +22,14 @@ func decode(t *testing.T, raw string) map[string]interface{} {
 	return m
 }
 
-func TestApplyDefaultsDisabledIsANoOp(t *testing.T) {
+func TestApplyDefaultsEmptyIsANoOp(t *testing.T) {
 	in := `{"game_mode":"host_paced"}`
-	d := sampleDefaults
-	d.Enabled = false
-	out, err := ApplyDefaults(in, d)
+	out, err := ApplyDefaults(in, Defaults{BgOverlay: 0.8, BgOverlayColor: "#000000"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if out != in {
-		t.Errorf("a disabled default changed the room theme: %s", out)
+		t.Errorf("a host with no theme changed the room theme: %s", out)
 	}
 }
 
@@ -113,7 +110,6 @@ func TestApplyDefaultsSurvivesAMalformedTheme(t *testing.T) {
 
 func TestSanitizeDefaultsUsesTheQuizRules(t *testing.T) {
 	d := SanitizeDefaults(Defaults{
-		Enabled:        true,
 		BgHostURL:      "https://evil.example.com/x.png",
 		BgPlayerURL:    "/uploads/img-u1-p.webp",
 		LogoURL:        "/uploads/../../etc/passwd",
@@ -132,14 +128,58 @@ func TestSanitizeDefaultsUsesTheQuizRules(t *testing.T) {
 	if d.BgOverlayColor != "" {
 		t.Errorf("a non-hex colour survived: %q", d.BgOverlayColor)
 	}
-	if !d.Enabled {
-		t.Error("Enabled was lost")
-	}
 }
 
 func TestSanitizeDefaultsWithoutImagesDropsTheScrim(t *testing.T) {
-	d := SanitizeDefaults(Defaults{Enabled: true, LogoURL: "/uploads/img-u1-l.png", BgOverlay: 0.7, BgOverlayColor: "#000000"})
+	d := SanitizeDefaults(Defaults{LogoURL: "/uploads/img-u1-l.png", BgOverlay: 0.7, BgOverlayColor: "#000000"})
 	if d.BgOverlay != 0 || d.BgOverlayColor != "" {
 		t.Errorf("a scrim with no image survived: %+v", d)
+	}
+}
+
+const (
+	presetHost   = "/uploads/theme-presets/aurora-host.svg"
+	presetPlayer = "/uploads/theme-presets/aurora-player.svg"
+)
+
+func TestIsPreset(t *testing.T) {
+	for u, want := range map[string]bool{
+		presetHost:                                 true,
+		"/uploads/theme-presets/":                  false,
+		"/uploads/theme-presets/../img-u1-x.png":   false,
+		"/uploads/theme-presets/sub/x.svg":         false,
+		"/uploads/img-u1-123-abc.webp":             false,
+		"https://evil.example.com/theme-presets/x": false,
+	} {
+		if got := IsPreset(u); got != want {
+			t.Errorf("IsPreset(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestCustomKeysIgnoresPresets(t *testing.T) {
+	d := Defaults{BgHostURL: presetHost, BgPlayerURL: presetPlayer}
+	if keys := d.CustomKeys(); len(keys) != 0 {
+		t.Errorf("a preset counted as custom branding: %v", keys)
+	}
+	d.LogoURL = "/uploads/img-u1-logo.png"
+	if keys := d.CustomKeys(); len(keys) != 1 || keys[0] != "logo_url" {
+		t.Errorf("CustomKeys = %v, want [logo_url]", keys)
+	}
+}
+
+func TestWithoutCustomKeepsPresetsOnly(t *testing.T) {
+	d := Defaults{BgHostURL: presetHost, BgPlayerURL: presetPlayer, BgOverlay: 0.5, LogoURL: "/uploads/img-u1-logo.png"}.WithoutCustom()
+	if d.BgHostURL != presetHost || d.BgPlayerURL != presetPlayer || d.BgOverlay != 0.5 {
+		t.Errorf("a preset was dropped: %+v", d)
+	}
+	if d.LogoURL != "" {
+		t.Errorf("a custom logo survived: %+v", d)
+	}
+
+	// A pair with one custom image goes as a whole, scrim included.
+	d = Defaults{BgHostURL: presetHost, BgPlayerURL: "/uploads/img-u1-p.webp", BgOverlay: 0.5, BgOverlayColor: "#000000"}.WithoutCustom()
+	if d != (Defaults{}) {
+		t.Errorf("half a custom background survived: %+v", d)
 	}
 }

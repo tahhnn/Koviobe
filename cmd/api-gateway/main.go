@@ -171,6 +171,9 @@ func main() {
 			// Host Profile
 			private.GET("/auth/profile", handler.GetProfile)
 			private.POST("/auth/change-password", handler.ChangePassword)
+			// The host's own room theme, applied to their quizzes that set none.
+			private.GET("/profile/theme", middleware.RequireRole("host", "admin"), handler.GetMyTheme)
+			private.PUT("/profile/theme", middleware.RequireRole("host", "admin"), handler.SetMyTheme)
 			private.GET("/realtime/host-token", handler.GetRealtimeToken)
 
 			// License / subscription — hosts can only view their own entitlements.
@@ -230,14 +233,6 @@ func main() {
 				adminUsers.PATCH("/:id/role", handler.AdminUpdateUserRole)
 				adminUsers.PATCH("/:id/status", handler.AdminUpdateUserStatus)
 				adminUsers.GET("/:id/activity", middleware.RequirePermission("audit:read"), handler.AdminUserActivity)
-			}
-
-			// Default room theme for quizzes that set none.
-			adminTheme := private.Group("/admin/theme")
-			adminTheme.Use(middleware.RequireRole("admin"))
-			{
-				adminTheme.GET("/default", handler.AdminGetDefaultTheme)
-				adminTheme.PUT("/default", handler.AdminSetDefaultTheme)
 			}
 
 			// Account audit trail — admin only (decision 2026-10-05).

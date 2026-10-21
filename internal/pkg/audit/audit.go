@@ -23,8 +23,8 @@ var allowedMetaKeys = map[string]bool{
 	"is_active": true, "count": true, "rows": true, "format": true,
 	"filters":    true,
 	"product_id": true, "amount_vnd": true, "duration_days": true,
-	// The default room theme an admin saved: upload paths, a scrim and a
-	// colour, nothing a request body could smuggle in (see theme.SanitizeDefaults).
+	// A host's room theme: upload paths, a scrim and a colour, nothing a
+	// request body could smuggle in (see theme.SanitizeDefaults).
 	"theme": true,
 }
 
