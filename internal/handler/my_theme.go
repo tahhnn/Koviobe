@@ -67,6 +67,47 @@ func GetMyTheme(c *gin.Context) {
 	c.JSON(http.StatusOK, myThemeResponse(d, updatedAt))
 }
 
+// vetUserTheme sanitizes a submitted room theme and applies the plan gate.
+//
+// It returns the theme to store, or a non-zero status and the body to send.
+// Separate from the handler, and taking enforcing and the entitlement lookup
+// as arguments, so the gate can be tested without a database or package state
+// — the same reason vetThemeConfig takes them.
+func vetUserTheme(req theme.Defaults, enforcing bool, entitlements func() (license.Entitlements, error)) (theme.Defaults, int, gin.H) {
+	clean := theme.SanitizeDefaults(req)
+	// A URL the sanitizer dropped is refused rather than silently cleared: the
+	// host would otherwise save, see a success, and find the image gone.
+	for _, pair := range [][2]string{
+		{req.BgHostURL, clean.BgHostURL},
+		{req.BgPlayerURL, clean.BgPlayerURL},
+		{req.LogoURL, clean.LogoURL},
+	} {
+		if pair[0] != "" && pair[1] == "" {
+			return theme.Defaults{}, http.StatusBadRequest, gin.H{"error": "Images must be files uploaded to this site"}
+		}
+	}
+
+	// The built-in looks are open to every plan; the host's own images are
+	// custom branding, gated the same way as on a quiz.
+	keys := clean.CustomKeys()
+	if len(keys) == 0 || !enforcing {
+		return clean, 0, nil
+	}
+	ents, err := entitlements()
+	if err != nil {
+		return theme.Defaults{}, http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"}
+	}
+	if !ents.AllowCustomBranding {
+		return theme.Defaults{}, http.StatusForbidden, gin.H{
+			"error":   "Custom branding requires Pro plan",
+			"plan_id": ents.PlanID,
+			"feature": "allow_custom_branding",
+			"fields":  keys,
+		}
+	}
+	return clean, 0, nil
+}
+
 // SetMyTheme replaces the caller's room theme.
 //
 // Applies to rooms created from now on. A room copies its theme when it is
@@ -80,37 +121,12 @@ func SetMyTheme(c *gin.Context) {
 	}
 	uid := c.GetUint("user_id")
 
-	clean := theme.SanitizeDefaults(req)
-	// A URL the sanitizer dropped is refused rather than silently cleared: the
-	// host would otherwise save, see a success, and find the image gone.
-	for _, pair := range [][2]string{
-		{req.BgHostURL, clean.BgHostURL},
-		{req.BgPlayerURL, clean.BgPlayerURL},
-		{req.LogoURL, clean.LogoURL},
-	} {
-		if pair[0] != "" && pair[1] == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Images must be files uploaded to this site"})
-			return
-		}
-	}
-
-	// The built-in looks are open to every plan; the host's own images are
-	// custom branding, gated the same way as on a quiz.
-	if keys := clean.CustomKeys(); len(keys) > 0 && license.Enforcing() {
-		ents, err := license.GetEntitlements(uid)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve license"})
-			return
-		}
-		if !ents.AllowCustomBranding {
-			c.JSON(http.StatusForbidden, gin.H{
-				"error":   "Custom branding requires Pro plan",
-				"plan_id": ents.PlanID,
-				"feature": "allow_custom_branding",
-				"fields":  keys,
-			})
-			return
-		}
+	clean, status, body := vetUserTheme(req, license.Enforcing(), func() (license.Entitlements, error) {
+		return license.GetEntitlements(uid)
+	})
+	if status != 0 {
+		c.JSON(status, body)
+		return
 	}
 
 	raw, err := json.Marshal(clean)

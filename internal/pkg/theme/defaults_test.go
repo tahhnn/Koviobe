@@ -144,12 +144,15 @@ const (
 
 func TestIsPreset(t *testing.T) {
 	for u, want := range map[string]bool{
-		presetHost:                                 true,
-		"/uploads/theme-presets/":                  false,
-		"/uploads/theme-presets/../img-u1-x.png":   false,
-		"/uploads/theme-presets/sub/x.svg":         false,
-		"/uploads/img-u1-123-abc.webp":             false,
-		"https://evil.example.com/theme-presets/x": false,
+		presetHost:                                     true,
+		"/uploads/theme-presets/":                      false,
+		"/uploads/theme-presets/../img-u1-x.png":       false,
+		"/uploads/theme-presets/sub/x.svg":             false,
+		"/uploads/img-u1-123-abc.webp":                 false,
+		"https://evil.example.com/theme-presets/x":     false,
+		"/uploads/theme-presets/%2e%2e%2fimg-u5-x.jpg": false,
+		"/uploads/theme-presets/img-u5-123-abc.jpg":    false,
+		"/uploads/theme-presets/Aurora-host.svg":       false,
 	} {
 		if got := IsPreset(u); got != want {
 			t.Errorf("IsPreset(%q) = %v, want %v", u, got, want)

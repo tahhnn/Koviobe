@@ -94,8 +94,12 @@ func isLocalUpload(u string) bool {
 		return false
 	}
 	// A traversal inside the name would escape the upload directory when the
-	// gateway resolves it against its root.
-	if strings.Contains(u, "..") {
+	// gateway resolves it against its root. Percent-encoding and backslashes
+	// are refused too: nginx decodes "%2e%2e%2f" into "../" before resolving,
+	// so "/uploads/theme-presets/%2e%2e%2fimg-u5-x.png" passed a check for
+	// ".." and was served as the host's own upload. No name this deployment
+	// writes contains either character.
+	if strings.Contains(u, "..") || strings.ContainsAny(u, "%\\") {
 		return false
 	}
 	return len(u) > len(UploadPrefix)

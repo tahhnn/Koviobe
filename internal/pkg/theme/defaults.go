@@ -2,6 +2,7 @@ package theme
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 )
 
@@ -23,13 +24,15 @@ type Defaults struct {
 // and every plan may use them: picking one is not custom branding.
 const PresetPrefix = UploadPrefix + "theme-presets/"
 
+// presetName is the shape of every file in public/uploads/theme-presets/.
+// Matched whole rather than by prefix: anything looser lets a host name their
+// own upload as a "preset" — an encoded "../" after the prefix is resolved by
+// nginx — and so take custom branding on a plan without it.
+var presetName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*\.svg$`)
+
 // IsPreset reports whether an image is one of the built-in looks.
 func IsPreset(u string) bool {
-	if !strings.HasPrefix(u, PresetPrefix) || !isLocalUpload(u) {
-		return false
-	}
-	name := u[len(PresetPrefix):]
-	return name != "" && !strings.Contains(name, "/")
+	return strings.HasPrefix(u, PresetPrefix) && presetName.MatchString(u[len(PresetPrefix):])
 }
 
 // CustomKeys lists the images in d that are the host's own rather than a

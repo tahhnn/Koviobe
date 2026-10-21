@@ -14,6 +14,8 @@ func TestSanitizeRejectsOffsiteImages(t *testing.T) {
 		`{"bg_host_url":"/uploads/"}`,
 		`{"logo_url":"https://evil.example.com/logo.png"}`,
 		`{"bg_player_url":"data:image/png;base64,AAAA"}`,
+		`{"logo_url":"/uploads/%2e%2e%2fevil.example.com"}`,
+		`{"logo_url":"/uploads/theme-presets/..%5cevil.example.com"}`,
 	}
 	for _, in := range cases {
 		out, err := Sanitize(in)
