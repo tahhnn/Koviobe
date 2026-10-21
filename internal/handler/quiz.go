@@ -505,6 +505,17 @@ func CreateRoom(c *gin.Context) {
 		return
 	}
 
+	// The admin's default look fills whatever branding the quiz left empty.
+	// Cosmetic, so a failure to read it is logged and the room goes ahead with
+	// the quiz's own theme rather than refusing to start a game over it.
+	if defaults, err := loadDefaultTheme(); err != nil {
+		log.Printf("[CreateRoom] default theme unavailable, using the quiz's own: %v", err)
+	} else if themed, err := theme.ApplyDefaults(roomTheme, defaults); err != nil {
+		log.Printf("[CreateRoom] default theme not applied: %v", err)
+	} else {
+		roomTheme = themed
+	}
+
 	// [L-3 FIX] Use crypto/rand instead of deprecated rand.Seed + math/rand for PIN generation
 	// The uniqueness check must match the DB constraint, which is a global unique
 	// index on pin_code covering finished and soft-deleted rooms too. Excluding

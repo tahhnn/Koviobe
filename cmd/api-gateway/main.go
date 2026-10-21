@@ -232,6 +232,14 @@ func main() {
 				adminUsers.GET("/:id/activity", middleware.RequirePermission("audit:read"), handler.AdminUserActivity)
 			}
 
+			// Default room theme for quizzes that set none.
+			adminTheme := private.Group("/admin/theme")
+			adminTheme.Use(middleware.RequireRole("admin"))
+			{
+				adminTheme.GET("/default", handler.AdminGetDefaultTheme)
+				adminTheme.PUT("/default", handler.AdminSetDefaultTheme)
+			}
+
 			// Account audit trail — admin only (decision 2026-10-05).
 			adminAudit := private.Group("/admin/audit")
 			adminAudit.Use(middleware.RequireRole("admin"), middleware.RequirePermission("audit:read"))
