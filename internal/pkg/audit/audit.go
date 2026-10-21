@@ -23,9 +23,6 @@ var allowedMetaKeys = map[string]bool{
 	"is_active": true, "count": true, "rows": true, "format": true,
 	"filters":    true,
 	"product_id": true, "amount_vnd": true, "duration_days": true,
-	// A host's room theme: upload paths, a scrim and a colour, nothing a
-	// request body could smuggle in (see theme.SanitizeDefaults).
-	"theme": true,
 }
 
 // Entry is one audit row before it is written.

@@ -171,9 +171,6 @@ func main() {
 			// Host Profile
 			private.GET("/auth/profile", handler.GetProfile)
 			private.POST("/auth/change-password", handler.ChangePassword)
-			// The host's own room theme, applied to their quizzes that set none.
-			private.GET("/profile/theme", middleware.RequireRole("host", "admin"), handler.GetMyTheme)
-			private.PUT("/profile/theme", middleware.RequireRole("host", "admin"), handler.SetMyTheme)
 			private.GET("/realtime/host-token", handler.GetRealtimeToken)
 
 			// License / subscription — hosts can only view their own entitlements.

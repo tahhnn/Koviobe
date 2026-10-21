@@ -22,8 +22,7 @@ const uploadGracePeriod = 48 * time.Hour
 //
 // There is no uploads table and no per-file owner row: the URL is embedded in
 // the JSON of questions.options / questions.content / questions.explanation,
-// quizzes.theme_config, rooms.theme_config, templates.questions and
-// user_themes.config. So
+// quizzes.theme_config, rooms.theme_config and templates.questions. So
 // reference counting is not available, and the sweep is
 // mark-and-sweep instead — list what is on disk, ask the database which names
 // still appear anywhere, delete the rest once they are past the grace period.
@@ -131,11 +130,6 @@ func referencedUploadNames() (map[string]struct{}, error) {
 		// the background out from under a game in progress and out of every
 		// finished room's results screen.
 		`SELECT theme_config FROM rooms     WHERE theme_config LIKE '%/uploads/%'`,
-		// A host's own room theme. Its images are uploaded from the settings
-		// page and referenced nowhere else until a room copies them, so
-		// without this row a theme nobody has played yet is swept after the
-		// grace period and every new room loses its background.
-		`SELECT config      FROM user_themes WHERE config LIKE '%/uploads/%'`,
 	}
 
 	for _, q := range queries {

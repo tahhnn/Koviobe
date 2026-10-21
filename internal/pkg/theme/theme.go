@@ -178,7 +178,24 @@ func RequestsPlayerPaced(raw string) bool {
 	return Parse(raw).GameMode == "player_paced"
 }
 
-// BrandingKeys lists the branding a theme sets, for the license check.
+// PresetPrefix is where the built-in themes live. They ship with the frontend
+// (public/uploads/theme-presets/) rather than on the upload volume, and every
+// plan may pick one: a preset is not custom branding.
+const PresetPrefix = UploadPrefix + "theme-presets/"
+
+// presetName is the shape of every file in public/uploads/theme-presets/.
+// Matched whole rather than by prefix: anything looser lets a host name their
+// own upload as a "preset" — an encoded "../" after the prefix is resolved by
+// nginx — and so take custom branding on a plan without it.
+var presetName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*\.svg$`)
+
+// IsPreset reports whether an image is one of the built-in themes.
+func IsPreset(u string) bool {
+	return strings.HasPrefix(u, PresetPrefix) && presetName.MatchString(u[len(PresetPrefix):])
+}
+
+// BrandingKeys lists the custom branding a theme sets, for the license check.
+// A built-in preset image is not custom branding and is not listed.
 //
 // Returned as a slice rather than a bool so the 403 can name the field the
 // host actually touched; "custom branding requires Pro" on a quiz where they
@@ -186,14 +203,14 @@ func RequestsPlayerPaced(raw string) bool {
 func BrandingKeys(raw string) []string {
 	c := Parse(raw)
 	var keys []string
-	if c.BgHostURL != "" {
-		keys = append(keys, "bg_host_url")
-	}
-	if c.BgPlayerURL != "" {
-		keys = append(keys, "bg_player_url")
-	}
-	if c.LogoURL != "" {
-		keys = append(keys, "logo_url")
+	for _, f := range []struct{ key, url string }{
+		{"bg_host_url", c.BgHostURL},
+		{"bg_player_url", c.BgPlayerURL},
+		{"logo_url", c.LogoURL},
+	} {
+		if f.url != "" && !IsPreset(f.url) {
+			keys = append(keys, f.key)
+		}
 	}
 	return keys
 }

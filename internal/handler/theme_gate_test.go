@@ -128,3 +128,41 @@ func TestVetThemeConfigBlocksSoloAndWatermarkOnFreePlan(t *testing.T) {
 		t.Fatalf("free host removed the watermark (ok=%v code=%d)", ok, code)
 	}
 }
+
+// Built-in presets are open to every plan; only the host's own images are
+// custom branding.
+func TestVetThemeConfigFreePlanMayPickAPreset(t *testing.T) {
+	raw := `{"bg_host_url":"/uploads/theme-presets/aurora-host.svg","bg_player_url":"/uploads/theme-presets/aurora-player.svg","bg_overlay":0.35}`
+	out, ok, code, body := vet(t, freePlan, true, raw)
+	if !ok {
+		t.Fatalf("a preset was refused on the free plan: %d %v", code, body)
+	}
+	if !strings.Contains(out, "aurora-host.svg") {
+		t.Fatalf("the preset was dropped: %s", out)
+	}
+}
+
+func TestVetThemeConfigFreePlanCannotDressAnUploadAsAPreset(t *testing.T) {
+	for _, u := range []string{
+		"/uploads/theme-presets/%2e%2e%2fimg-u5-1789354565049-c430b2cc.jpg",
+		"/uploads/theme-presets/img-u5-1789354565049-c430b2cc.jpg",
+	} {
+		for _, key := range []string{"bg_host_url", "logo_url"} {
+			out, ok, _, _ := vet(t, freePlan, true, `{"`+key+`":"`+u+`"}`)
+			if ok && strings.Contains(out, "img-u5") {
+				t.Errorf("%s=%q reached storage on the free plan: %s", key, u, out)
+			}
+		}
+	}
+}
+
+func TestVetThemeConfigFreePlanStillCannotUseOwnLogoBesideAPreset(t *testing.T) {
+	raw := `{"bg_host_url":"/uploads/theme-presets/aurora-host.svg","logo_url":"/uploads/img-u5-logo.png"}`
+	_, ok, code, body := vet(t, freePlan, true, raw)
+	if ok || code != http.StatusForbidden {
+		t.Fatalf("own logo on the free plan got ok=%v code=%d, want 403", ok, code)
+	}
+	if fields, _ := body["fields"].([]any); len(fields) != 1 || fields[0] != "logo_url" {
+		t.Errorf("403 named %v, want only logo_url", body["fields"])
+	}
+}

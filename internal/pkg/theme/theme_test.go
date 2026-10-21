@@ -179,3 +179,37 @@ func TestHideAvatarsSurvivesSanitize(t *testing.T) {
 		}
 	}
 }
+
+const (
+	presetHost   = "/uploads/theme-presets/aurora-host.svg"
+	presetPlayer = "/uploads/theme-presets/aurora-player.svg"
+)
+
+func TestIsPreset(t *testing.T) {
+	for u, want := range map[string]bool{
+		presetHost:                                     true,
+		"/uploads/theme-presets/":                      false,
+		"/uploads/theme-presets/../img-u1-x.png":       false,
+		"/uploads/theme-presets/sub/x.svg":             false,
+		"/uploads/theme-presets/%2e%2e%2fimg-u5-x.jpg": false,
+		"/uploads/theme-presets/img-u5-123-abc.jpg":    false,
+		"/uploads/theme-presets/Aurora-host.svg":       false,
+		"/uploads/img-u1-123-abc.webp":                 false,
+		"https://evil.example.com/theme-presets/x":     false,
+	} {
+		if got := IsPreset(u); got != want {
+			t.Errorf("IsPreset(%q) = %v, want %v", u, got, want)
+		}
+	}
+}
+
+func TestBrandingKeysIgnoresPresets(t *testing.T) {
+	raw := `{"bg_host_url":"` + presetHost + `","bg_player_url":"` + presetPlayer + `"}`
+	if keys := BrandingKeys(raw); len(keys) != 0 {
+		t.Errorf("a preset counted as custom branding: %v", keys)
+	}
+	raw = `{"bg_host_url":"` + presetHost + `","logo_url":"/uploads/img-u1-logo.png"}`
+	if keys := BrandingKeys(raw); len(keys) != 1 || keys[0] != "logo_url" {
+		t.Errorf("BrandingKeys = %v, want [logo_url]", keys)
+	}
+}
